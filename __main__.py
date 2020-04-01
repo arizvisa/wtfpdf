@@ -1,7 +1,8 @@
 import functools, itertools, types, builtins, operator, six
-import argparse, json, math, os.path
+import argparse, json, math, os.path, codecs
 import PDFCore
 
+PDFCodec = codecs.lookup('iso8859-1')
 infile = '/home/user/audit/nitro/nitro_for_ali/nitro_60e_non_minimized/poc.pdf'
 
 def ParsePDF(infile):
@@ -39,17 +40,23 @@ def PDFDecode(instance):
     if isinstance(instance, PDFCore.PDFObject):
         return instance
     elif isinstance(instance, dict):
-        res = { name.encode('latin1') : PDFDecode(item) for name, item in instance.items() }
+        # ensure the names in the dictionary are proper strings...
+        decoded = { name if isinstance(name, unicode) else PDFCodec.decode(name, 'ignore')[0] : item for name, item in instance.items() }
+        res = { PDFCodec.encode(name, 'ignore')[0] : PDFDecode(item) for name, item in decoded.items() }
         return PDFCore.PDFDictionary(elements=res)
+
     elif isinstance(instance, list):
         res = [ PDFDecode(item) for item in instance ]
         return PDFCore.PDFArray(elements=res)
+
     elif isinstance(instance, float):
         return PDFCore.PDFNum("{:f}".format(instance))
+
     elif isinstance(instance, six.integer_types):
         return PDFCore.PDFNum("{:d}".format(instance))
+
     elif isinstance(instance, six.string_types):
-        res = instance.encode('latin1')
+        res, _ = PDFCodec.encode(instance, 'ignore') if isinstance(instance, unicode) else (instance, len(instance))
 
         # check if it's a name
         if res.startswith(b'/'):
@@ -57,12 +64,12 @@ def PDFDecode(instance):
 
         # check if it's a reference
         try:
-            if len(res.split(' ')) == 3:
-                index, generation, reference = res.split(' ', 3)
+            if len(res.split(b' ')) == 3:
+                index, generation, reference = res.split(b' ', 3)
 
                 int(index)
                 assert int(generation) == 0
-                assert reference == 'R'
+                assert reference == b'R'
                 return PDFCore.PDFReference(index, generation)
 
         except (AssertionError, ValueError):
@@ -70,7 +77,7 @@ def PDFDecode(instance):
 
         # check if it's a hexstring
         try:
-            if len(res) % 2 == 0 and res.lower() == res and res.translate(None, ' \t\n') == res:
+            if len(res) % 2 == 0 and res.lower() == res and res.translate(None, b' \t\n') == res:
                 res.decode('hex')
                 return PDFCore.PDFHexString(res)
 
@@ -290,7 +297,7 @@ def load_body(pairs):
             stream.elements = meta.getElements()
             stream.decodedStream = data
 
-            if filter.lower() == 'binary':
+            if filter.lower() == u'binary':
                 body[index] = None, stream
                 continue
 
@@ -309,9 +316,9 @@ def update_body(objects):
     # Update the objects dict in-place
     for index in sorted(objects):
         flt, obj = objects[index]
-        Fobject = lambda object, index: "{:s} object {:d}".format(object.getType(), index)
-        Ffieldvalue = lambda field: "{:s}({!r})".format(field.__class__.__name__, field.getValue())
-        Ffieldname = lambda name: "`/{:s}`".format(name)
+        Fobject = lambda object, index: u"{:s} object {:d}".format(object.getType(), index)
+        Ffieldvalue = lambda field: u"{:s}({!r})".format(field.__class__.__name__, field.getValue())
+        Ffieldname = lambda name: u"`/{:s}`".format(name)
 
         # Ensure that we're an object stream
         if not isinstance(obj, PDFCore.PDFObjectStream):
@@ -331,35 +338,35 @@ def update_body(objects):
         meta_update = {}
 
         # First check if we need update the /Length for the stream
-        if not operator.contains(meta, '/Length'):
+        if not operator.contains(meta, u'/Length'):
             print("{:s} does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length')))
 
-        elif not isinstance(meta['/Length'], PDFCore.PDFNum):
+        elif not isinstance(meta[u'/Length'], PDFCore.PDFNum):
             t = PDFCore.PDFNum
             print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta['/Length']), t.__name__))
 
-        elif int(meta['/Length'].getValue()) != size:
-            meta_update['/Length'] = PDFCore.PDFNum("{:d}".format(size))
+        elif int(meta[u'/Length'].getValue()) != size:
+            meta_update[u'/Length'] = PDFCore.PDFNum(u"{:d}".format(size))
 
         # Now check to see if the /Filter needs to be fixed
         if flt is None and not operator.contains(meta, '/Filter'):
             pass
 
-        elif not operator.contains(meta, '/Filter'):
+        elif not operator.contains(meta, u'/Filter'):
             print("{:s} does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter')))
 
-        elif not isinstance(meta['/Filter'], PDFCore.PDFName):
+        elif not isinstance(meta[u'/Filter'], PDFCore.PDFName):
             t = PDFCore.PDFName
             print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta['/Filter']), t.__name__))
 
         elif flt is None:
-            meta_update['/Filter'] = None
+            meta_update[u'/Filter'] = None
 
-        elif meta['/Filter'].getValue() != flt.getValue():
-            meta_update['/Filter'] = flt
+        elif meta[u'/Filter'].getValue() != flt.getValue():
+            meta_update[u'/Filter'] = flt
 
         # Check if anything needs to be updated and then do it
-        if any(operator.contains(meta_update, name) for name in ['/Filter', '/Length']):
+        if any(operator.contains(meta_update, name) for name in [u'/Filter', u'/Length']):
             print("Updating the fields for {:s} object {:d}: {!s}".format(obj.getType(), index, ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())))
 
             remove = { name for name, item in meta_update.items() if item is None }
