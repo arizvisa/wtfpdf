@@ -11,7 +11,7 @@ def ParsePDF(infile):
 
 FormatStream = "{:d} {:d} obj".format
 
-def Encode(element):
+def PDFEncode(element):
     if isinstance(element, PDFCore.PDFNum):
         res = element.getValue()
         return float(res) if '.' in res else int(res)
@@ -29,20 +29,20 @@ def Encode(element):
         return str(res)
     elif isinstance(element, PDFCore.PDFArray):
         iterable = element.getElements()
-        return [ Encode(item) for item in iterable ]
+        return [ PDFEncode(item) for item in iterable ]
     elif isinstance(element, PDFCore.PDFDictionary):
         iterable = element.getElements()
-        return { str(name) : Encode(item) for name, item in iterable.items() }
+        return { str(name) : PDFEncode(item) for name, item in iterable.items() }
     raise TypeError(element)
 
-def Decode(instance):
+def PDFDecode(instance):
     if isinstance(instance, PDFCore.PDFObject):
         return instance
     elif isinstance(instance, dict):
-        res = { name.encode('latin1') : Decode(item) for name, item in instance.items() }
+        res = { name.encode('latin1') : PDFDecode(item) for name, item in instance.items() }
         return PDFCore.PDFDictionary(elements=res)
     elif isinstance(instance, list):
-        res = [ Decode(item) for item in instance ]
+        res = [ PDFDecode(item) for item in instance ]
         return PDFCore.PDFArray(elements=res)
     elif isinstance(instance, float):
         return PDFCore.PDFNum("{:f}".format(instance))
@@ -193,7 +193,7 @@ def do_readpdf(infile, parameters):
         if isinstance(object, PDFCore.PDFStream):
             if stats['Decoding Errors'] or parameters.compressed:
                 Fstream = operator.methodcaller('getRawStream')
-                suffix = 'binary'
+                suffix = 'Binary'
             else:
                 Fstream = operator.methodcaller('getStream')
                 suffix = stats['Filters'].translate(None, '/')
@@ -203,7 +203,7 @@ def do_readpdf(infile, parameters):
             with open(os.path.join(parameters.directory, stream_name), 'wb') as out:
                 out.write(stream)
 
-        elements = Encode(object)
+        elements = PDFEncode(object)
 
         elements_name = '.'.join([Fobjectname(index), 'json'])
         Fdump(elements, open(os.path.join(parameters.directory, elements_name), 'wt'))
@@ -268,11 +268,44 @@ def pairup_files(input):
 
         if len(content) > 1:
             print("More than one file was specified for object {:d}: {!r}".format(index, content))
-            
+
         result[index] = (meta[0], content[0] if len(content) > 0 else None)
 
     return result
 
+def load_body(pairs):
+    body = {}
+    for index, (metafile, contentfile) in pairs.items():
+        metadict = json.load(open(metafile, 'rt'))
+
+        if contentfile:
+            _, res = os.path.splitext(contentfile)
+            _, filter = res.split('.', 1)
+
+            meta, data = PDFDecode(metadict), open(contentfile, 'rb').read()
+
+            # the other of peepdf seems to smoke crack, so we'll explicitly
+            # modify the fields to get his shit to work...
+            stream = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
+            stream.elements = meta.getElements()
+            stream.decodedStream = data
+
+            if filter.lower() == 'Binary':
+                body[index] = None, stream
+                continue
+
+            stream.isEncodedStream = True
+            stream.filter = PDFCore.PDFName("/{:s}".format(filter))
+            stream.encode()
+            body[index] = stream.filter, stream
+
+        else:
+            body[index] = None, PDFDecode(metadict)
+        continue
+    return body
+
+#import glob
+#files = glob.glob('work/*')
 def do_writepdf(outfile, parameters):
 
     # first collect all of our object names
@@ -291,46 +324,30 @@ def do_writepdf(outfile, parameters):
     offset = 0x11
 
     # build our pdf body
+    objects = load_body(object_pairs)
+
+    if False:
+        flt, obj = objects[5]
+        print flt.getValue()
+        print obj.getElements()
+        print len(obj.getRawStream())   # size of (encoded) stream
+        print obj.getRawValue()         # entire object size
+        print PDFEncode(PDFDecode(obj.getElements()))   # back to a dictionary
+
     oldtrailer = []
     xrefs, body = [], PDFCore.PDFBody()
-    for index, (metafile, contentfile) in object_pairs.items():
-        metajson = json.load(open(metafile, 'rt'), encoding='latin1')
+    for index in sorted(objects):
+        flt, obj = objects[index]
+        elements = obj.getElements()
+        meta = [ PDFEncode(item) for item in elements ] if isinstance(elements, list) else { name : PDFEncode(item) for name, item in elements.items() }
 
         # skip our xrefs
-        if isinstance(metajson, dict) and metajson.get('/Type', None) == '/XRef':
-            oldtrailer.append((offset, metajson))
+        if isinstance(meta, dict) and meta.get('/Type', None) == '/XRef':
+            oldtrailer.append((offset, obj))
             continue
 
-        # the other of peepdf seems to smoke crack, so we'll explicitly
-        # modify the fields to get his shit to work...
-        if contentfile:
-            _, res = os.path.splitext(contentfile)
-            dot, filter = res.split('.', 1)
-            data = open(contentfile, 'rb').read()
-            if filter == 'binary':
-                metajson.pop('/Filter')
-                metajson['/Length'] = len(data)
-                meta = Decode(metajson)
-                newmeta = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
-                newmeta.elements = meta.getElements()
-                newmeta.decodedStream = data
-
-            else:
-                metajson['/Filter'] = "/{:s}".format(filter)
-                metajson['/Length'] = len(fakeencode(filter, Decode(metajson), data))
-                meta = Decode(metajson)
-                newmeta = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
-                newmeta.elements = meta.getElements()
-                newmeta.decodedStream = data
-                newmeta.isEncodedStream = True
-                newmeta.filter = PDFCore.PDFName(metajson['/Filter'])
-                newmeta.encode()
-            meta = newmeta
-
-        else:
-            meta = Decode(metajson)
-
-        body.setObject(id=index, object=meta)
+        # add the object to our body
+        body.setObject(id=index, object=obj)
         xrefs.append(PDFCore.PDFCrossRefEntry(offset, 0, 'n'))
         wtfdude = body.objects[index]
         offset += len(wtfdude.toFile())
@@ -369,9 +386,8 @@ def do_writepdf(outfile, parameters):
         raise ValueError(stupid)
 
     # append trailer manually because the other of peepdf is fucking crazy
-    (traileroffset, metajson), = oldtrailer
-    metajson.pop('/Filter')
-    res = Decode(metajson)
+    (traileroffset, trailerobj), = oldtrailer
+    res = PDFCore.PDFDictionary(elements=trailerobj.getElements())
     trailer = PDFCore.PDFTrailer(res)
     trailer.setLastCrossRefSection(str(body.nextOffset))
     trailer.setEOFOffset(offset)
