@@ -1,5 +1,5 @@
 import functools, itertools, types, builtins, operator, six
-import argparse, json, math, os.path, codecs
+import argparse, json, math, os.path, codecs, heapq
 import PDFCore
 
 PDFCodec = codecs.lookup('iso8859-1')
@@ -216,6 +216,14 @@ def do_readpdf(infile, parameters):
         Fdump(elements, open(os.path.join(parameters.directory, elements_name), 'wt'))
     return 0
 
+def object_size(objects, index, generation=0):
+    _, obj = objects[index]
+
+    # we need to calculate this ourselves because peepdf doesn't expose this
+    # to us in any form. the author instead hardcodes this calculation
+    fmt = '{:d} {:d} obj\n{:s}\nendobj\n'.format
+    return len(fmt(index, generation, obj.getRawValue()))
+
 def collect_files(paths):
     result = {}
     for item in paths:
@@ -381,6 +389,109 @@ def update_body(objects):
     # That's it, we've updated the metadata for each object
     return objects
 
+def find_xrefs(objects):
+    result = []
+    for index in sorted(objects):
+        _, obj = objects[index]
+        if not isinstance(obj, (PDFCore.PDFObjectStream, PDFCore.PDFDictionary)):
+            continue
+
+        # Check to see if this has a /Type in it
+        meta = obj.getElements()
+        if not operator.contains(meta, b'/Type'):
+            continue
+
+        # Check if it's an XRef
+        if meta['/Type'].getValue() != b'/XRef':
+            continue
+
+        result.append(index)
+    return result
+
+def process_xrefs(objects, indices, offset=0):
+    table = []
+    for index in sorted(objects):
+        _, obj = objects[index]
+        #size = len(obj.getRawValue())
+        size = object_size(objects, index)
+        bounds = offset, offset + size
+        table.append((bounds, index))
+        offset += size
+
+    # we're going to sort our /Prev offsets because this is intended to be
+    # incrementally updated, so we should be able to figure out what our
+    # chain will look like by moonwalking this data.
+    resultheap = []
+    for index in indices:
+        _, obj = objects[index]
+        meta = obj.getElements()
+        if operator.contains(meta, b'/Prev'):
+            heapq.heappush(resultheap, (int(meta[b'/Prev'].getValue()), index))
+        else:
+            heapq.heappush(resultheap, (None, index))
+        continue
+
+    # first element should always be our end
+    none, start = resultheap[0]
+    if none is not None:
+        heapq.heappush(resultheap, (None, -1))
+        print('Warning: Unable to find the initial XRef stream')
+    _, initial = resultheap.pop(0)
+
+    # now that things are sorted, let's figure out which objects that each
+    # offset points to
+    refs = {start : None}
+    for _, index in resultheap:
+        _, obj = objects[index]
+        offset = int(meta[b'/Prev'].getValue())
+        found = next((index for (left, right), index in table if left <= offset < right), None)
+        if find is None:
+            print("Warning: Unable to find index for offset {:+#x} referenced by object {:d}".format(offset, index))
+            continue
+        refs[index] = found
+
+    # okay, now we can figure out which order this goes
+    current, result = start, [start]
+    while current is not None:
+        if not operator.contains(refs, current):
+            break
+        result.append(refs[current])
+        current = refs[current]
+    if result[-1] is not None:
+        print("Warnings: XRef streams reference a stream that does not exist!")
+    return result
+
+def calculate_xrefs(objects, offset=0):
+    bounds = 0, max(sorted(objects))
+
+    # first build a slot table so we can figure out which objects
+    # will be free versus in-use
+    slots = []
+    for index in range(*bounds):
+        slots.append(True if index in objects else False)
+    slots.append(False)
+
+    # now we can iterate through our objects figuring out which slots
+    # to update with either an object offset or a free index
+    result = []
+    for index in range(*bounds):
+        if index not in objects:
+            next = slots[1 + index:].index(False)
+            xref = PDFCore.PDFCrossRefEntry(1 + index + next, 0xffff, 'f')
+            result.append(xref)
+            continue
+
+        # if our object exists, then create an xref entry for it
+        _, obj = objects[index]
+        xref = PDFCore.PDFCrossRefEntry(offset, 0, 'n')
+        result.append(xref)
+        #offset += len(obj.getRawValue())
+        offset += object_size(objects, index)
+
+    # append our last empty slot
+    result.append(PDFCore.PDFCrossRefEntry(0, 0xffff, 'f'))
+    return result
+
 #import glob
 #files = glob.glob('work/*')
 def do_writepdf(outfile, parameters):
@@ -405,6 +516,45 @@ def do_writepdf(outfile, parameters):
     if parameters.update_metadata:
         objects = update_body(objects)
 
+    # find all our previous xrefs
+    available = find_xrefs(objects)
+    streams = process_xrefs(objects, available, offset=offset)
+
+    # if we couldn't find a starting xref, then we'll force the last object
+    # to be one by removing it's /Prev field
+    if parameters.update_xrefs:
+        if not operator.contains(streams, None):
+            _, obj = objects[streams[-1]]
+            meta = obj.getElements()
+            meta.pop(b'/Prev')
+            obj.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue()
+            obj.elements = meta
+            streams.append(None)
+
+    # okay, now we finally have a place to start. so calculate our initial
+    # xrefs for each object that we're going to keep.
+    xrefs = calculate_xrefs(objects, offset=offset)
+
+    # I think that was it...so we can now finally rebuild the body
+    body = PDFCore.PDFBody()
+    body.setNextOffset(offset)
+    for index in sorted(objects):
+        _, obj = objects[index]
+        body.setObject(id=index, object=obj)
+
+    return 0
+    #if parameters.update_xrefs:
+    #for i in sorted(objects):
+    #    _, obj = objects[i]
+    #    if isinstance(obj, PDFCore.PDFObjectStream):
+    #        print obj.getElements()
+    #    elif isinstance(obj, PDFCore.PDFDictionary):
+    #        print obj.getElements()
+    print dir(obj)
+    print objects[21][1].toFile()
+    print P.getOffsets()
+
+    return 0
     if False:
         flt, obj = objects[5]
         print flt.getValue()
@@ -497,6 +647,7 @@ def halp():
         Pcombine.add_argument('-B', '--set-binary-chars', dest='set_binary', action='store', type=operator.methodcaller('decode','hex'), default='', help='set the binary comment at the top of the pdf')
         Pcombine.add_argument('-V', '--set-version', dest='set_version', action='store', type=float, default=1.7, help='set the pdf version to use')
         Pcombine.add_argument('-U', '--update-metadata', dest='update_metadata', action='store_true', default=False, help='update the metadata for each object (Filter and Length) by looking at the object\'s contents')
+        Pcombine.add_argument('-I', '--ignore-xrefs', dest='update_xrefs', action='store_false', default=True, help='ignore rebuilding of the xrefs (use one of the provided objects)')
 
     Phelp = Paction.add_parser('help', help='yep')
     return P
