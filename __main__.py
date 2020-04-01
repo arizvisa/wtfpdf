@@ -290,7 +290,7 @@ def load_body(pairs):
             stream.elements = meta.getElements()
             stream.decodedStream = data
 
-            if filter.lower() == 'Binary':
+            if filter.lower() == 'binary':
                 body[index] = None, stream
                 continue
 
@@ -303,6 +303,76 @@ def load_body(pairs):
             body[index] = None, PDFDecode(metadict)
         continue
     return body
+
+def update_body(objects):
+
+    # Update the objects dict in-place
+    for index in sorted(objects):
+        flt, obj = objects[index]
+        Fobject = lambda object, index: "{:s} object {:d}".format(object.getType(), index)
+        Ffieldvalue = lambda field: "{:s}({!r})".format(field.__class__.__name__, field.getValue())
+        Ffieldname = lambda name: "`/{:s}`".format(name)
+
+        # Ensure that we're an object stream
+        if not isinstance(obj, PDFCore.PDFObjectStream):
+            print("Skipping {:s}..".format(Fobject(obj, index)))
+            continue
+
+        meta = obj.getElements()
+        size = len(obj.getRawStream())
+
+        # And that our metadata is a dict that we can update
+        meta_obj = PDFDecode(meta)
+        if not isinstance(meta_obj, PDFCore.PDFDictionary):
+            t = meta_obj.__class__
+            print("Skipping {:s} with invalid metadata type ({!s})".format(Fobject(obj, index), t.__name__))
+            continue
+
+        meta_update = {}
+
+        # First check if we need update the /Length for the stream
+        if not operator.contains(meta, '/Length'):
+            print("{:s} does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length')))
+
+        elif not isinstance(meta['/Length'], PDFCore.PDFNum):
+            t = PDFCore.PDFNum
+            print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta['/Length']), t.__name__))
+
+        elif int(meta['/Length'].getValue()) != size:
+            meta_update['/Length'] = PDFCore.PDFNum("{:d}".format(size))
+
+        # Now check to see if the /Filter needs to be fixed
+        if flt is None and not operator.contains(meta, '/Filter'):
+            pass
+
+        elif not operator.contains(meta, '/Filter'):
+            print("{:s} does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter')))
+
+        elif not isinstance(meta['/Filter'], PDFCore.PDFName):
+            t = PDFCore.PDFName
+            print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta['/Filter']), t.__name__))
+
+        elif flt is None:
+            meta_update['/Filter'] = None
+
+        elif meta['/Filter'].getValue() != flt.getValue():
+            meta_update['/Filter'] = flt
+
+        # Check if anything needs to be updated and then do it
+        if any(operator.contains(meta_update, name) for name in ['/Filter', '/Length']):
+            print("Updating the fields for {:s} object {:d}: {!s}".format(obj.getType(), index, ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())))
+
+            remove = { name for name, item in meta_update.items() if item is None }
+            update = { name : meta_update[name] for name in meta_update if name not in remove }
+            meta.update(update)
+            [ meta.pop(name) for name in remove ]
+
+        # Re-assign our metadata the stream directly because peepdf sucks
+        obj.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue()
+        obj.elements = meta
+
+    # That's it, we've updated the metadata for each object
+    return objects
 
 #import glob
 #files = glob.glob('work/*')
@@ -323,8 +393,10 @@ def do_writepdf(outfile, parameters):
         P.binaryChars = parameters.set_binary
     offset = 0x11
 
-    # build our pdf body
+    # build our pdf body and update it if necessary
     objects = load_body(object_pairs)
+    if parameters.update_metadata:
+        objects = update_body(objects)
 
     if False:
         flt, obj = objects[5]
@@ -417,6 +489,7 @@ def halp():
         Pcombine.add_argument('files', nargs='*', help='specify the directory containing the objects to write')
         Pcombine.add_argument('-B', '--set-binary-chars', dest='set_binary', action='store', type=operator.methodcaller('decode','hex'), default='', help='set the binary comment at the top of the pdf')
         Pcombine.add_argument('-V', '--set-version', dest='set_version', action='store', type=float, default=1.7, help='set the pdf version to use')
+        Pcombine.add_argument('-U', '--update-metadata', dest='update_metadata', action='store_true', default=False, help='update the metadata for each object (Filter and Length) by looking at the object\'s contents')
 
     Phelp = Paction.add_parser('help', help='yep')
     return P
