@@ -7,8 +7,10 @@ infile = '/home/user/audit/nitro/nitro_for_ali/nitro_60e_non_minimized/poc.pdf'
 
 def ParsePDF(infile):
     P = PDFCore.PDFParser()
-    _, p = P.parse(infile, forceMode=True, looseMode=True, manualAnalysis=False)
-    return p
+    _, p = P.parse(infile, forceMode=True, looseMode=True, manualAnalysis=True)
+    end = reduce(lambda agg, item: agg + [len(item) + (agg[-1] if len(agg) else 0)], P.fileParts, [])
+    bounds = [(right - len(content), right) for right, content in zip(end, P.fileParts)]
+    return p, bounds
 
 FormatStream = "{:d} {:d} obj".format
 
@@ -98,7 +100,7 @@ def fakeencode(filter, meta, data):
     return res.encodedStream
 
 def do_listpdf(infile, parameters):
-    P = ParsePDF(infile)
+    P, _ = ParsePDF(infile)
     stats = P.getStats()
 
     print("Parsed file: {:s}".format(infile))
@@ -181,7 +183,7 @@ def do_listpdf(infile, parameters):
 
     return 0
 
-def do_readversion(pdf, version, path, parameters):
+def do_readversion(pdf, version, path, parameters, bounds):
     stats = pdf.getStats()
 
     Fstream = operator.methodcaller('getRawStream' if parameters.compressed else 'getStream')
@@ -220,19 +222,33 @@ def do_readversion(pdf, version, path, parameters):
     # Last thing to do is to write our trailer and then we're done...
     stream, section = pdf.trailer[version]
 
-    elements_name = '.'.join(['trailer', 'json'])
+    elements = PDFEncode(section.getTrailerDictionary())
+    if parameters.fix_offsets and operator.contains(elements, b'/Prev'):
+        left, right = bounds
+        previous_offset = elements[b'/Prev']
+        if not (left <= previous_offset - left < right):
+            elements.pop(b'/Prev')
+            print("Removing /Prev element from trailer due to its offset ({:+#x}) being out of bounds ({:#x}{:+x}) when subtracting start ({:#x})".format(previous_offset, left, right, previous_offset - left))
+        pass
+
+    elements_name = '.'.join(["{:d}_trailer".format(1 + index), 'json'])
     Fdump(elements, open(os.path.join(path, elements_name), 'wt'))
     if not stream:
         return True
 
-    stream_name = '.'.join(['trailer', 'xref'])
+    if parameters.fix_offsets:
+        left, right = bounds
+        print("Subtracting offset {:+#x} from trailer stream offset ({:+#x})".format(left, stream.getLastCrossRefSection()))
+        stream.setLastCrossRefSection(right - stream.getLastCrossRefSection())
+
+    stream_name = '.'.join(["{:d}_trailer".format(1 + index), 'xref'])
     with open(os.path.join(path, stream_name), 'wb') as out:
         out.write(stream.toFile())
         out.write('\n')
     return True
 
 def do_readpdf(infile, parameters):
-    P = ParsePDF(infile)
+    P, bounds = ParsePDF(infile)
     position = P.getOffsets()
     stats = P.getStats()
 
@@ -247,7 +263,7 @@ def do_readpdf(infile, parameters):
     for i, path in enumerate(parameters.directory):
         if not os.path.isdir(path):
             raise OSError(path)
-        do_readversion(P, i, path, parameters)
+        do_readversion(P, i, path, parameters, bounds=bounds[i])
 
     return 0
 
@@ -275,7 +291,7 @@ def collect_files(paths):
             continue
 
         if len(components) == 2:
-            trailer, index = components
+            index, trailer = components
             if trailer == 'trailer':
                 try:
                     int(index)
@@ -342,7 +358,7 @@ def pairup_files(input):
 def pairup_trailers(input):
     result = {}
 
-    Ftrailername = "trailer_{:d}".format
+    Ftrailername = "{:d}_trailer".format
     for index, files in input.items():
 
         # pair up our files
@@ -422,12 +438,7 @@ def load_trailers(pairs):
         data = open(xreftable, 'rb').read()
         result[index] = meta, data
 
-    # collect our results into a table
-    table = []
-    for index in sorted(result):
-        meta, xrefs = result[index]
-        table.append((meta, xrefs))
-    return table
+    return result
 
 def update_body(objects):
 
@@ -518,11 +529,10 @@ def find_xrefs(objects):
         result.append(index)
     return result
 
-def process_xrefs(objects, indices, offset=0):
+def process_xrefs(trailer, objects, indices, offset=0):
     table = []
     for index in sorted(objects):
         _, obj = objects[index]
-        #size = len(obj.getRawValue())
         size = object_size(objects, index)
         bounds = offset, offset + size
         table.append((bounds, index))
@@ -544,23 +554,16 @@ def process_xrefs(objects, indices, offset=0):
     # if we found no streams, then return nothing because we'll need to add
     # our table in the trailer.
     if len(resultheap) == 0:
-        return [None]
-
-    # first element should always be our end
-    none, start = resultheap[0]
-    if none is not None:
-        heapq.heappush(resultheap, (None, -1))
-        print('Warning: Unable to find the initial XRef stream')
-    _, initial = resultheap.pop(0)
+        return []
 
     # now that things are sorted, let's figure out which objects that each
     # offset points to
-    refs = {start : None}
+    refs = {}
     for _, index in resultheap:
         _, obj = objects[index]
         offset = int(meta[b'/Prev'].getValue())
         found = next((index for (left, right), index in table if left <= offset < right), None)
-        if find is None:
+        if found is None:
             print("Warning: Unable to find index for offset {:+#x} referenced by object {:d}".format(offset, index))
             continue
         refs[index] = found
@@ -604,8 +607,6 @@ def calculate_xrefs(objects, offset=0):
         offset += object_size(objects, index)
     return result + [PDFCore.PDFCrossRefEntry(offset, 0, 'n')]
 
-#import glob
-#files = glob.glob('work/*')
 def do_writepdf(outfile, parameters):
 
     # first collect all of our object names
@@ -631,8 +632,9 @@ def do_writepdf(outfile, parameters):
 
     # find all our previous xrefs
     trailers = load_trailers(trailer_pairs)
+    index = next(index for index in sorted(trailers))
     xavailable = find_xrefs(objects)
-    xstreams = process_xrefs(objects, xavailable, offset=offset)
+    xstreams = process_xrefs(trailers[index], objects, xavailable, offset=offset)
 
     # if we couldn't find a starting xref, then we'll force the last object
     # to be one by removing it's /Prev field
@@ -792,6 +794,7 @@ def halp():
     if Pread:
         Pread.add_argument('directory', nargs='+', help='specify the directories to dump objects from each trailer into')
         Pread.add_argument('-c', '--compressed', action='store_true', default=False, help='extract objects with decompressing them')
+        Pread.add_argument('-F', '--fix-offsets', dest='fix_offsets', action='store_true', default=False, help='fix offsets within the trailer and any xrefs')
 
     Pcombine = Paction.add_parser('write', help='write the files in a directory into a pdf file')
     if Pcombine:
