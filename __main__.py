@@ -632,6 +632,11 @@ def load_xrefs(pairs):
         result[index] = stream.filter, stream
     return result
 
+def load_trailer(infile):
+    metadict = json.load(open(infile, 'rt'))
+    meta = PDFDecode(metadict)
+    return PDFCore.PDFTrailer(meta)
+
 def update_body(objects):
 
     # Update the objects dict in-place
@@ -792,9 +797,9 @@ def do_writepdf(outfile, parameters):
     # Add them to the body
     for index in sorted(xrefs):
         _, obj = xrefs[index]
-        if table[index].objectOffset != body.getNextOffset():
+        if xrefs_user[index].objectOffset != body.getNextOffset():
             raise AssertionError((body.getNextOffset(), table[index].objectOffset))
-        body.setObject(id=index + len(xreftable), object=obj)
+        body.setObject(id=index + len(xrefs_body), object=obj)
 
     # ...and then update all the objects/streams we added as per peepdf's method
     P.addBody(body)
@@ -803,133 +808,27 @@ def do_writepdf(outfile, parameters):
     P.addNumEncodedStreams(body.getNumEncodedStreams())
     P.addNumDecodingErrors(body.getNumDecodingErrors())
 
-    # now we can start adding our xref stuff
-    p.addCrossrefTableSection([None, None])
+    # Now we can start adding our xref stuff
+    P.addCrossRefTableSection([None, None])
 
     # Lastly...the trailer, which should point to our table.
-    trailer = PDFCore.PDFTrailer(trailer_meta, body.getNextOffset())
-    trailer.setLastCrossRefSection(xrefs[xstreams[0]].objectOffset)
-    trailer.setNumObjects(len(xrefs))
-    print trailer.toFile()
+    infile, = trailer_files
+    trailer = load_trailer(infile)
+    trailer.setLastCrossRefSection(0)
 
-    return 0
-
-    # if we couldn't find a starting xref, then we'll force the last object
-    # to be one by removing it's /Prev field
-    if parameters.update_xrefs:
-        if not operator.contains(xstreams, None):
-            _, obj = objects[xstreams[-1]]
-            meta = obj.getElements()
-            meta.pop(b'/Prev')
-            obj.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue()
-            obj.elements = meta
-            xstreams.append(None)
-
-    # If we were asked to update our xrefs, then we'll need to add just
-    # one more object here..
-    if params.update_xrefs and parameters.set_version <= 1.5:
-        xrefs.append(PDFCore.PDFCrossRefEntry(body.getNextOffset(), 0, 'n'))
-        xrefs.append(PDFCore.PDFCrossRefEntry(0, 0xffff, 'f'))
-
-        # append our last empty slot
-        section = PDFCore.PDFCrossRefSubSection(0, len(xrefs), xrefs)
-
-        # now to build a fucking table
-        table = PDFCore.PDFCrossRefSection()
-        table.addSubsection(section)
-
-        trailer_meta = PDFCore.PDFDictionary({})
-        trailer_meta.setElement(b'/Size', PDFDecode(len(xrefs)))
-        # FIXME
-
-    elif parameters.update_xrefs:
-        raise NotImplementedError
-
-    else:
-        _, table = objects[xstreams[0]]
-
-    return 0
-    #if parameters.update_xrefs:
-    #for i in sorted(objects):
-    #    _, obj = objects[i]
-    #    if isinstance(obj, PDFCore.PDFObjectStream):
-    #        print obj.getElements()
-    #    elif isinstance(obj, PDFCore.PDFDictionary):
-    #        print obj.getElements()
-    print dir(obj)
-    print objects[21][1].toFile()
-    print P.getOffsets()
-
-    return 0
-    if False:
-        flt, obj = objects[5]
-        print flt.getValue()
-        print obj.getElements()
-        print len(obj.getRawStream())   # size of (encoded) stream
-        print obj.getRawValue()         # entire object size
-        print PDFEncode(PDFDecode(obj.getElements()))   # back to a dictionary
-
-    oldtrailer = []
-    xrefs, body = [], PDFCore.PDFBody()
-    for index in sorted(objects):
-        flt, obj = objects[index]
-        elements = obj.getElements()
-        meta = [ PDFEncode(item) for item in elements ] if isinstance(elements, list) else { name : PDFEncode(item) for name, item in elements.items() }
-
-        # skip our xrefs
-        if isinstance(meta, dict) and meta.get('/Type', None) == '/XRef':
-            oldtrailer.append((offset, obj))
-            continue
-
-        # add the object to our body
-        body.setObject(id=index, object=obj)
-        xrefs.append(PDFCore.PDFCrossRefEntry(offset, 0, 'n'))
-        wtfdude = body.objects[index]
-        offset += len(wtfdude.toFile())
-
-    body.setNextOffset(offset)
-
-    # update pdf
-    P.addBody(body)
-    P.addNumObjects(body.getNumObjects())
-    P.addNumStreams(body.getNumStreams())
-    P.addNumEncodedStreams(body.getNumEncodedStreams())
-    P.addNumDecodingErrors(body.getNumDecodingErrors())
-
-    # we can't trust peepdf, so don't let it do any of these
+    # We can't trust peepdf, so don't let it do any of these
     P.trailer = [[None, None]]
     P.crossRefTable = [[None, None]]
 
-    # add xrefs
-    if False:
-        print oldxrefs
-        #section = PDFCore.PDFCrossRefSubSection(0, len(xrefs), xrefs)
-        section = PDFCore.PDFCrossRefSubSection(0, 0, xrefs)
-        xrefsection = PDFCore.PDFCrossRefSection()
-        xrefsection.addSubsection(section)
-        size = len(xrefs) * 20 + len('startxref\n')
-        xrefsection.setSize(size)
-        P.crossRefTable = [[xrefsection, None]]
-        #P.addCrossRefTableSection([xrefsection, None])
-        offset += size
-
-    # save pdf
-    P.setSize(offset)
+    # Save the PDF using peepdf
     P.updateStats()
     fucking, stupid = P.save(outfile)
     if fucking:
         raise ValueError(stupid)
 
-    # append trailer manually because the other of peepdf is fucking crazy
-    (traileroffset, trailerobj), = oldtrailer
-    res = PDFCore.PDFDictionary(elements=trailerobj.getElements())
-    trailer = PDFCore.PDFTrailer(res)
-    trailer.setLastCrossRefSection(str(body.nextOffset))
-    trailer.setEOFOffset(offset)
-
+    # Append trailer manually because the author of peepdf is fucking crazy
     with open(outfile, 'ab') as out:
         out.write(trailer.toFile())
-
     return 0
 
 def halp():
