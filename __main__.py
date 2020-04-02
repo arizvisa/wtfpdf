@@ -99,12 +99,7 @@ def fakeencode(filter, meta, data):
 
 def do_listpdf(infile, parameters):
     P = ParsePDF(infile)
-    position, = P.getOffsets()
     stats = P.getStats()
-
-    if len(stats['Versions']) != 1:
-        raise AssertionError(stats['Versions'])
-    V, = stats['Versions']
 
     print("Parsed file: {:s}".format(infile))
     if P.binary:
@@ -116,78 +111,85 @@ def do_listpdf(infile, parameters):
     print("SHA256: {:s}".format(stats['SHA256']))
     print('')
 
-    offset, _ = position['header']
-    print("Header: {:#x}".format(offset))
-    offset, size = position['trailer']
-    print("Trailer: {:#x}{:+x}".format(offset, size))
-    offset, _ = position['eof']
-    print("%%EOF: {:#x}".format(offset))
-    print('')
 
-    count, items = V['Streams']
-    print("Number of streams: {:d}".format(int(stats['Streams'])))
-    print("Indices of streams: {:s}".format(', '.join(map("{:d}".format, items))))
-    count, item = V['Encoded']
-    print("Indices of encoded streams: ({:+d}) {:s}".format(int(count), ', '.join(map("{:d}".format, items))))
-    count, item = V['Decoding Errors']
-    print("Streams with decoding errors: ({:+d}) {:s}".format(int(count), ', '.join(map("{:d}".format, items))))
-    print('')
+    for i, position in enumerate(P.getOffsets()):
+        if operator.contains(position, 'header'):
+            offset, _ = position['header']
+            print("Header: {:#x}".format(offset))
 
-    count, items = V['Xref Streams']
-    print("Number of xref streams: {:d}".format(int(count)))
-    print("Indices of xref streams: {:s}".format(', '.join(map("{:d}".format, items))))
-    print('')
+        offset, size = position['trailer']
+        print("\tTrailer[{:d}]: {:#x}{:+x}".format(i, offset, size))
+        offset, _ = position['eof']
+        print("\t%%EOF[{:d}]: {:#x}".format(i, offset))
+        print('')
 
-    count, items = V['Object Streams']
-    print("Number of object streams: {:d}".format(int(count)))
-    print("Indices of object streams: {:s}".format(', '.join(map("{:d}".format, items))))
-    count, item = V['Errors']
-    print("Objects with errors: ({:+d}) {:s}".format(int(count), ', '.join(map("{:d}".format, items))))
-    print('')
+    for i, V in enumerate(stats['Versions']):
+        print("Information for Trailer {:d}".format(i))
+        count, items = V['Streams']
+        print("\tNumber of streams: {:d}".format(int(stats['Streams'])))
+        print("\tIndices of streams: {:s}".format(', '.join(map("{:d}".format, items))))
+        count, item = V['Encoded']
+        print("\tIndices of encoded streams: ({:+d}) {:s}".format(int(count), ', '.join(map("{:d}".format, items))))
 
-    count, items = V['Objects']
-    print("Total number of objects: {:d}".format(int(stats['Objects'])))
-    print("Indices of objects: {:s}".format(', '.join(map("{:d}".format, items))))
-    _, items = V['Compressed Objects']
-    print("Indices of compressed objects: ({:+d}) {:s}".format(int(count), ', '.join(map("{:d}".format, items))))
-    print('')
+        if V['Decoding Errors']:
+            count, item = V['Decoding Errors']
+            print("\tStreams with decoding errors: ({:+d}) {:s}".format(int(count), ', '.join(map("{:d}".format, items))))
+        print('')
 
-    max_digits = map(max, zip(*position['objects']))
-    bases = [ 10, 0x10, 0x10 ]
-    digits_id, digits_pos, digits_sz = (math.trunc(math.ceil(math.log(item, base))) for item, base in zip(max_digits, bases))
+        count, items = V['Xref Streams']
+        print("\tNumber of xref streams: {:d}".format(int(count)))
+        print("\tIndices of xref streams: {:s}".format(', '.join(map("{:d}".format, items))))
+        print('')
 
-    print("Object position:")
-    for id, offset, size in position['objects']:
-        object = P.getObject(id)
-        meta = object.getStats()
-        dictionary = object.getElements()
-        if isinstance(dictionary, dict):
-            description = {name : item.getRawValue() for name, item in sorted(dictionary.items())}
-        else:
-            description = [ item.getRawValue() for item in dictionary ]
-        print("[{offset:#0{digits_pos:d}x}{size:+0{digits_sz:d}x}] {:d} {:d} obj {padding:s}: {dict!s}".format(id, 0, offset=offset, size=size, dict=description, digits_pos=2+digits_pos, digits_sz=1 + digits_sz, padding=' '*(digits_id - len("{:d}".format(id)))))
+        if V['Object Streams']:
+            count, items = V['Object Streams']
+            print("\tNumber of object streams: {:d}".format(int(count)))
+            print("\tIndices of object streams: {:s}".format(', '.join(map("{:d}".format, items))))
+
+        if V['Errors']:
+            count, item = V['Errors']
+            print("\tObjects with errors: ({:+d}) {:s}".format(int(count), ', '.join(map("{:d}".format, items))))
+        print('')
+
+        count, items = V['Objects']
+        print("\tTotal number of objects: {:d}".format(int(stats['Objects'])))
+        print("\tIndices of objects: {:s}".format(', '.join(map("{:d}".format, items))))
+
+        if V['Compressed Objects']:
+            _, items = V['Compressed Objects']
+            print("\tIndices of compressed objects: ({:+d}) {:s}".format(int(count), ', '.join(map("{:d}".format, items))))
+        print('')
+
+    for i, position in enumerate(P.getOffsets()):
+        max_digits = map(max, zip(*position['objects']))
+        bases = [ 10, 0x10, 0x10 ]
+        digits_id, digits_pos, digits_sz = (math.trunc(math.ceil(math.log(item, base))) for item, base in zip(max_digits, bases))
+
+        print("Object positions for trailer {:d}:".format(i))
+        for id, offset, size in position['objects']:
+            object = P.getObject(id)
+            meta = object.getStats()
+            dictionary = object.getElements()
+            if isinstance(dictionary, dict):
+                items = [ "{:s}={!s}".format(name, item.getRawValue()) for name, item in sorted(dictionary.items())]
+            else:
+                items = [ item.getRawValue() for item in dictionary ]
+            description = ', '.join(items).translate(None, '\r\n')
+            print("\t [{offset:#0{digits_pos:d}x}{size:+0{digits_sz:d}x}] {:d} {:d} obj {padding:s}: {dict!s}".format(id, 0, offset=offset, size=size, dict=description if len(description) < 132 else description[:132] + '...', digits_pos=2+digits_pos, digits_sz=1 + digits_sz, padding=' '*(digits_id - len("{:d}".format(id)))))
+        print('\n')
+        continue
 
     return 0
 
-def do_readpdf(infile, parameters):
-    P = ParsePDF(infile)
-    position, = P.getOffsets()
-    stats = P.getStats()
-
-    if len(stats['Versions']) != 1:
-        raise AssertionError(stats['Versions'])
-    V, = stats['Versions']
-
-    path = parameters.directory
-    if not os.path.isdir(path):
-        raise OSError(path)
+def do_readversion(pdf, version, path, parameters):
+    stats = pdf.getStats()
 
     Fstream = operator.methodcaller('getRawStream' if parameters.compressed else 'getStream')
     Felement = operator.methodcaller('getRawValue' if parameters.compressed else 'getValue')
 
-    _, items = V['Objects']
+    _, items = stats['Versions'][version]['Objects']
     for index in items:
-        object = P.getObject(index)
+        object = pdf.getObject(index, version=version)
         stats = object.getStats()
 
         Fobjectname = "{:d}_0_obj".format
@@ -195,59 +197,58 @@ def do_readpdf(infile, parameters):
         Ftypename = lambda element: element.__class__.__name__
 
         if stats['Errors'] and int(stats['Errors']) > 0:
-            print("Errors with {:s}: {:d}".format(Fobjectname(index), int(stats['Errors'])))
+            print("Errors in trailer {:d} ({:s}) with {:s}: {:d}".format(version, path, Fobjectname(index), int(stats['Errors'])))
 
         if isinstance(object, PDFCore.PDFStream):
-            if stats['Decoding Errors'] or parameters.compressed:
+            if stats.get('Decoding Errors', False) or parameters.compressed:
                 Fstream = operator.methodcaller('getRawStream')
                 suffix = 'Binary'
             else:
                 Fstream = operator.methodcaller('getStream')
-                suffix = stats['Filters'].translate(None, '/')
+                suffix = stats.get('Filters', 'Binary').translate(None, '/')
             stream = Fstream(object)
 
             stream_name = '.'.join([Fobjectname(index), suffix])
-            with open(os.path.join(parameters.directory, stream_name), 'wb') as out:
+            with open(os.path.join(path, stream_name), 'wb') as out:
                 out.write(stream)
 
         elements = PDFEncode(object)
 
         elements_name = '.'.join([Fobjectname(index), 'json'])
-        Fdump(elements, open(os.path.join(parameters.directory, elements_name), 'wt'))
+        Fdump(elements, open(os.path.join(path, elements_name), 'wt'))
 
-    # Next we'll need to sort our trailers so that the referenced one is
-    # actually first.
-    trailers = P.trailer[:]
-    offset, size = position['trailer']
+    # Last thing to do is to write our trailer and then we're done...
+    stream, section = pdf.trailer[version]
 
-    starting = { index for index, (stream, _) in enumerate(trailers) if (stream.getOffset(), stream.getSize()) == (offset, size) }
-    if len(starting) == 0:
-        available = [(stream.getOffset(), stream.getSize()) for stream, _ in trailers]
-        print("Unable to locate trailer stream within bounds ({:#x}{:+x}): [{!s}]".format(offset, size, ', '.join(itertools.starmap("{:#x}{:+x}".format, available))))
+    elements_name = '.'.join(['trailer', 'json'])
+    Fdump(elements, open(os.path.join(path, elements_name), 'wt'))
+    if not stream:
+        return True
 
-    elif len(starting) > 1:
-        available = [(stream.getOffset(), stream.getSize()) for stream, _ in map(functools.partial(operator.getitem, trailers), starting)]
-        print("More than one trailer was found within bounds ({:#x}{:+x}): [{!s}]".format(offset, size, ', '.join(itertools.starmap("{:#x}{:+x}".format, available))))
+    stream_name = '.'.join(['trailer', 'xref'])
+    with open(os.path.join(path, stream_name), 'wb') as out:
+        out.write(stream.toFile())
+        out.write('\n')
+    return True
 
-    # Seed our result, and store what we have leftover so we can enumerate through it
-    head = [item for item in map(functools.partial(operator.getitem, trailers), starting)]
-    tail = [item for index, item in enumerate(trailers) if not operator.contains(starting, index)]
+def do_readpdf(infile, parameters):
+    P = ParsePDF(infile)
+    position = P.getOffsets()
+    stats = P.getStats()
 
-    # Now to aggreate the rest of our trailers
-    Ftrailername = "trailer_{:d}".format
-    for index, (stream, section) in enumerate(itertools.chain(head, tail)):
-        elements = PDFEncode(section.getTrailerDictionary())
+    if len(stats['Versions']) != len(parameters.directory):
+        count = len(stats['Version'])
+        print("The input document that was specified ({:s}) contains {:d} individual trailers!".format(infile, count))
+        print('')
+        print("Please provide {:d} paths to extract each trailer into in order to continue!".format(count))
+        print('')
+        raise ValueError("Only {:d} directories were provided...".format(len(parameters.directory)))
 
-        elements_name = '.'.join([Ftrailername(index), 'json'])
-        Fdump(elements, open(os.path.join(parameters.directory, elements_name), 'wt'))
-        if not stream:
-            continue
+    for i, path in enumerate(parameters.directory):
+        if not os.path.isdir(path):
+            raise OSError(path)
+        do_readversion(P, i, path, parameters)
 
-        stream_name = '.'.join([Ftrailername(index), 'xref'])
-        with open(os.path.join(parameters.directory, stream_name), 'wb') as out:
-            out.write(stream.toFile())
-            out.write('\n')
-        continue
     return 0
 
 def object_size(objects, index, generation=0):
@@ -373,13 +374,7 @@ def pairup_trailers(input):
             print("More than one xref table was specified for trailer {:d}: {!r}".format(index, xrefs))
 
         result[index] = (meta[0], xrefs[0] if len(xrefs) > 0 else None)
-
-    # collect our results into a table
-    table = []
-    for index in sorted(result):
-        meta, xrefs = result[index]
-        table.append((meta, xrefs))
-    return table
+    return result
 
 def load_body(pairs):
     body = {}
@@ -413,18 +408,26 @@ def load_body(pairs):
     return body
 
 def load_trailers(pairs):
-    result = []
-    for metafile, xreftable in pairs:
+    result = {}
+    for index in sorted(pairs):
+        metafile, xreftable = pairs[index]
+
         metadict = json.load(open(metafile, 'rt'))
         meta = PDFDecode(metadict)
 
         if xreftable is None:
-            result.append((meta, None))
+            result[index] = meta, None
             continue
 
         data = open(xreftable, 'rb').read()
-        result.append((meta, data))
-    return result
+        result[index] = meta, data
+
+    # collect our results into a table
+    table = []
+    for index in sorted(result):
+        meta, xrefs = result[index]
+        table.append((meta, xrefs))
+    return table
 
 def update_body(objects):
 
@@ -627,6 +630,7 @@ def do_writepdf(outfile, parameters):
         objects = update_body(objects)
 
     # find all our previous xrefs
+    trailers = load_trailers(trailer_pairs)
     xavailable = find_xrefs(objects)
     xstreams = process_xrefs(objects, xavailable, offset=offset)
 
@@ -786,7 +790,7 @@ def halp():
 
     Pread = Paction.add_parser('read', help='read the objects within a pdf file')
     if Pread:
-        Pread.add_argument('directory', help='specify the directory to dump objects into')
+        Pread.add_argument('directory', nargs='+', help='specify the directories to dump objects from each trailer into')
         Pread.add_argument('-c', '--compressed', action='store_true', default=False, help='extract objects with decompressing them')
 
     Pcombine = Paction.add_parser('write', help='write the files in a directory into a pdf file')
