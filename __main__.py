@@ -288,67 +288,6 @@ def get_xrefs(trailer, table):
         offset = int(elements[b'/Prev'].getValue())
     return
 
-def do_readversion(pdf, version, path, parameters, bounds):
-    stats = pdf.getStats()
-
-    _, items = stats['Versions'][version]['Objects']
-    for index in items:
-        object = pdf.getObject(index, version=version)
-        stats = object.getStats()
-
-        Fobjectname = "{:d}_0_obj".format
-        Fdump = functools.partial(json.dump, encoding=PDFCodec.name, indent=4, sort_keys=True)
-        Ftypename = lambda element: element.__class__.__name__
-
-        if stats['Errors'] and int(stats['Errors']) > 0:
-            print("Errors in trailer {:d} ({:s}) with {:s}: {:d}".format(version, path, Fobjectname(index), int(stats['Errors'])))
-
-        if isinstance(object, PDFCore.PDFStream):
-            if stats.get('Decoding Errors', False) or parameters.compressed:
-                Fstream = operator.methodcaller('getRawStream')
-                suffix = 'Binary'
-            else:
-                Fstream = operator.methodcaller('getStream')
-                suffix = stats.get('Filters', 'Binary').translate(None, '/')
-            stream = Fstream(object)
-
-            stream_name = '.'.join([Fobjectname(index), suffix])
-            with open(os.path.join(path, stream_name), 'wb') as out:
-                out.write(stream)
-
-        elements = PDFEncode(object)
-
-        elements_name = '.'.join([Fobjectname(index), 'json'])
-        Fdump(elements, open(os.path.join(path, elements_name), 'wt'))
-
-    # Last thing to do is to write our trailer and then we're done...
-    stream, section = pdf.trailer[version]
-
-    elements = PDFEncode(section.getTrailerDictionary())
-    if parameters.fix_offsets and operator.contains(elements, b'/Prev'):
-        left, right = bounds
-        previous_offset = elements[b'/Prev']
-        if not (left <= previous_offset - left < right):
-            elements.pop(b'/Prev')
-            print("Removing /Prev element from trailer due to its offset ({:+#x}) being out of bounds ({:#x}{:+x}) when subtracting start ({:#x})".format(previous_offset, left, right, previous_offset - left))
-        pass
-
-    elements_name = '.'.join(["{:d}_trailer".format(1 + index), 'json'])
-    Fdump(elements, open(os.path.join(path, elements_name), 'wt'))
-    if not stream:
-        return True
-
-    if parameters.fix_offsets:
-        left, right = bounds
-        print("Subtracting offset {:+#x} from trailer stream offset ({:+#x})".format(left, stream.getLastCrossRefSection()))
-        stream.setLastCrossRefSection(stream.getLastCrossRefSection() - left)
-
-    stream_name = '.'.join(["{:d}_trailer".format(1 + index), 'xref'])
-    with open(os.path.join(path, stream_name), 'wb') as out:
-        out.write(stream.toFile())
-        out.write('\n')
-    return True
-
 def collect_objects(pdf, revision, path, parameters):
     stats = pdf.getStats()
 
