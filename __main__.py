@@ -191,7 +191,7 @@ def do_readpdf(infile, parameters):
         stats = object.getStats()
 
         Fobjectname = "{:d}_0_obj".format
-        Fdump = functools.partial(json.dump, encoding='latin1', indent=4, sort_keys=True)
+        Fdump = functools.partial(json.dump, encoding=PDFCodec.name, indent=4, sort_keys=True)
         Ftypename = lambda element: element.__class__.__name__
 
         if stats['Errors'] and int(stats['Errors']) > 0:
@@ -214,6 +214,39 @@ def do_readpdf(infile, parameters):
 
         elements_name = '.'.join([Fobjectname(index), 'json'])
         Fdump(elements, open(os.path.join(parameters.directory, elements_name), 'wt'))
+
+    # Next we'll need to sort our trailers so that the referenced one is
+    # actually first.
+    trailers = P.trailer[:]
+    offset, size = position['trailer']
+
+    starting = { index for index, (section, _) in enumerate(trailers) if (section.getOffset(), section.getSize()) == (offset, size) }
+    if len(starting) == 0:
+        available = [(section.getOffset(), section.getSize()) for section, _ in trailers]
+        print("Unable to locate trailer within bounds ({:#x}{:+x}): [{!s}]".format(offset, size, ', '.join(itertools.starmap("{:#x}{:+x}".format, available))))
+
+    elif len(starting) > 1:
+        available = [(section.getOffset(), section.getSize()) for section, _ in map(functools.partial(operator.getitem, trailers), starting)]
+        print("More than one trailer was found within bounds ({:#x}{:+x}): [{!s}]".format(offset, size, ', '.join(itertools.starmap("{:#x}{:+x}".format, available))))
+
+    # Seed our result, and store what we have leftover so we can enumerate through it
+    head = [(section, stream) for section, stream in map(functools.partial(operator.getitem, trailers), starting)]
+    tail = [pair for index, pair in enumerate(trailers) if not operator.contains(starting, index)]
+
+    # Now to aggreate the rest of our trailers
+    Ftrailername = "trailer_{:d}".format
+    for index, (section, stream) in enumerate(itertools.chain(head, tail)):
+        elements = PDFEncode(section.getTrailerDictionary())
+
+        elements_name = '.'.join([Ftrailername(index), 'json'])
+        Fdump(elements, open(os.path.join(parameters.directory, elements_name), 'wt'))
+        if stream is None:
+            continue
+
+        stream_name = '.'.join([Ftrailername(index), 'xrefs'])
+        with open(os.path.join(parameters.directory, stream_name), 'wb') as out:
+            out.write(stream)
+        continue
     return 0
 
 def object_size(objects, index, generation=0):
@@ -225,7 +258,7 @@ def object_size(objects, index, generation=0):
     return len(fmt(index, generation, obj.toFile()))
 
 def collect_files(paths):
-    result = {}
+    result, trailers = {}, {}
     for item in paths:
         if not os.path.isfile(item):
             print("Skipping non-file path: {:s}".format(item))
@@ -235,8 +268,24 @@ def collect_files(paths):
 
         # validate our name format
         components = name.split('_')
-        if len(components) != 3:
+        if not operator.contains({2, 3}, len(components)):
             print("Skipping path due to invalid format: {:s}".format(item))
+            continue
+
+        if len(components) == 2:
+            trailer, index = components
+            if trailer == 'trailer':
+                try:
+                    int(index)
+
+                except ValueError:
+                    pass
+
+                else:
+                    trailers.setdefault(int(index), []).append(item)
+                    continue
+
+            print("Skipping path due to invalid trailer format: {:s}".format(item))
             continue
 
         # validate its components
@@ -251,7 +300,7 @@ def collect_files(paths):
             print("Skipping path due to invalid index: {:s}".format(item))
 
         result.setdefault(int(index), []).append(item)
-    return result
+    return result, trailers
 
 def pairup_files(input):
     result = {}
@@ -288,6 +337,49 @@ def pairup_files(input):
 
     return result
 
+def pairup_trailers(input):
+    result = {}
+
+    Ftrailername = "trailer_{:d}".format
+    for index, files in input.items():
+
+        # pair up our files
+        meta, xrefs = [], []
+        for item in files:
+            fullname = os.path.basename(item)
+            name, ext = os.path.splitext(fullname)
+            if name != Ftrailername(index) or not operator.contains({'.json', '.xrefs'}, ext):
+                print("Skipping path for trailer {:d} due to invalid name: {:s}".format(index, item))
+                continue
+            if ext == '.json':
+                meta.append(item)
+            elif ext == '.xrefs':
+                xrefs.append(item)
+            else:
+                raise ValueError(fullname, name, ext)
+            continue
+
+        # if no metafile was found, then skip this object
+        if len(meta) == 0:
+            print("Skipping trailer {:d} as no metafile was found: {!r}".format(index, meta))
+            continue
+
+        # warn the user if they provided more than one file for a single object
+        if len(meta) > 1:
+            print("More than one metafile was specified for trailer {:d}: {!r}".format(index, meta))
+
+        if len(xrefs) > 1:
+            print("More than one xref table was specified for trailer {:d}: {!r}".format(index, xrefs))
+
+        result[index] = (meta[0], xrefs[0] if len(xrefs) > 0 else None)
+
+    # collect our results into a table
+    table = []
+    for index in sorted(result):
+        meta, xrefs = result[index]
+        table.append((meta, xrefs))
+    return table
+
 def load_body(pairs):
     body = {}
     for index, (metafile, contentfile) in pairs.items():
@@ -318,6 +410,20 @@ def load_body(pairs):
             body[index] = None, PDFDecode(metadict)
         continue
     return body
+
+def load_trailers(pairs):
+    result = []
+    for metafile, xreftable in pairs:
+        metadict = json.load(open(metafile, 'rt'))
+        meta = PDFDecode(metadict)
+
+        if xreftable is None:
+            result.append((meta, None))
+            continue
+
+        data = open(xreftable, 'rb').read()
+        result.append((meta, data))
+    return result
 
 def update_body(objects):
 
@@ -499,8 +605,9 @@ def calculate_xrefs(objects, offset=0):
 def do_writepdf(outfile, parameters):
 
     # first collect all of our object names
-    object_files = collect_files(parameters.files)
+    object_files, trailer_files = collect_files(parameters.files)
     object_pairs = pairup_files(object_files)
+    trailer_pairs = pairup_trailers(trailer_files)
 
     # create our pdf instance
     HEADER = '%PDF-X.x\n'
