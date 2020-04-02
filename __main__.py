@@ -220,32 +220,33 @@ def do_readpdf(infile, parameters):
     trailers = P.trailer[:]
     offset, size = position['trailer']
 
-    starting = { index for index, (section, _) in enumerate(trailers) if (section.getOffset(), section.getSize()) == (offset, size) }
+    starting = { index for index, (stream, _) in enumerate(trailers) if (stream.getOffset(), stream.getSize()) == (offset, size) }
     if len(starting) == 0:
-        available = [(section.getOffset(), section.getSize()) for section, _ in trailers]
-        print("Unable to locate trailer within bounds ({:#x}{:+x}): [{!s}]".format(offset, size, ', '.join(itertools.starmap("{:#x}{:+x}".format, available))))
+        available = [(stream.getOffset(), stream.getSize()) for stream, _ in trailers]
+        print("Unable to locate trailer stream within bounds ({:#x}{:+x}): [{!s}]".format(offset, size, ', '.join(itertools.starmap("{:#x}{:+x}".format, available))))
 
     elif len(starting) > 1:
-        available = [(section.getOffset(), section.getSize()) for section, _ in map(functools.partial(operator.getitem, trailers), starting)]
+        available = [(stream.getOffset(), stream.getSize()) for stream, _ in map(functools.partial(operator.getitem, trailers), starting)]
         print("More than one trailer was found within bounds ({:#x}{:+x}): [{!s}]".format(offset, size, ', '.join(itertools.starmap("{:#x}{:+x}".format, available))))
 
     # Seed our result, and store what we have leftover so we can enumerate through it
-    head = [(section, stream) for section, stream in map(functools.partial(operator.getitem, trailers), starting)]
-    tail = [pair for index, pair in enumerate(trailers) if not operator.contains(starting, index)]
+    head = [item for item in map(functools.partial(operator.getitem, trailers), starting)]
+    tail = [item for index, item in enumerate(trailers) if not operator.contains(starting, index)]
 
     # Now to aggreate the rest of our trailers
     Ftrailername = "trailer_{:d}".format
-    for index, (section, stream) in enumerate(itertools.chain(head, tail)):
+    for index, (stream, section) in enumerate(itertools.chain(head, tail)):
         elements = PDFEncode(section.getTrailerDictionary())
 
         elements_name = '.'.join([Ftrailername(index), 'json'])
         Fdump(elements, open(os.path.join(parameters.directory, elements_name), 'wt'))
-        if stream is None:
+        if not stream:
             continue
 
-        stream_name = '.'.join([Ftrailername(index), 'xrefs'])
+        stream_name = '.'.join([Ftrailername(index), 'xref'])
         with open(os.path.join(parameters.directory, stream_name), 'wb') as out:
-            out.write(stream)
+            out.write(stream.toFile())
+            out.write('\n')
         continue
     return 0
 
@@ -348,12 +349,12 @@ def pairup_trailers(input):
         for item in files:
             fullname = os.path.basename(item)
             name, ext = os.path.splitext(fullname)
-            if name != Ftrailername(index) or not operator.contains({'.json', '.xrefs'}, ext):
+            if name != Ftrailername(index) or not operator.contains({'.json', '.xref'}, ext):
                 print("Skipping path for trailer {:d} due to invalid name: {:s}".format(index, item))
                 continue
             if ext == '.json':
                 meta.append(item)
-            elif ext == '.xrefs':
+            elif ext == '.xref':
                 xrefs.append(item)
             else:
                 raise ValueError(fullname, name, ext)
