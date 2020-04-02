@@ -183,6 +183,75 @@ def do_listpdf(infile, parameters):
 
     return 0
 
+def read_revision(pdf, revision, bounds):
+    stats, objects = pdf.getStats(), pdf.body[revision].objects
+
+    result = {}
+    for index in sorted(objects):
+        iobject, object = objects[index], objects[index].object
+        if object.getType() != 'stream':
+            continue
+        res = pdf.getObject(index, version=revision)
+        result[iobject.getOffset()] = (revision, index, res, iobject.getSize())
+        #print revision, index, hex(iobject.offset), hex(iobject.getOffset()), hex(iobject.getSize()), object.getType()
+
+    # add our xref table entries
+    for item in pdf.crossRefTable[revision]:
+        if item:
+            result[item.getOffset()] = (revision, None, item, item.getSize())
+        continue
+
+    # add our trailer entries
+    for item in pdf.trailer[revision]:
+        if item:
+            result[item.getOffset()] = (revision, None, item, item.getSize())
+        continue
+    return result
+
+def find_trailermeta(table, trailer):
+    stream, section = trailer
+    if section is not None:
+        selected = section if len(section.getTrailerDictionary().getElements()) else stream
+    else:
+        selected = stream
+    return selected.getLastCrossRefSection(), selected.getTrailerDictionary()
+
+def get_xrefs(trailer, table):
+    offset, _ = find_trailermeta(table, trailer)
+    if not operator.contains(table, offset):
+        return
+
+    while operator.contains(table, offset):
+        revision, _, object, size = table[offset]
+        yield object
+
+        # If our offset points at a trailer, then check its dictionary
+        # to see what's next
+        if isinstance(object, PDFCore.PDFTrailer):
+            meta = object.getTrailerDictionary()
+            elements = meta.getElements()
+
+        # If we found a stream, then we can keep going
+        elif isinstance(object, PDFCore.PDFStream):
+            elements = object.getElements()
+
+        # Getting to a crossrefsection means that we're done here
+        elif isinstance(object, PDFCore.PDFCrossRefSection):
+            return
+
+        else:
+            raise ValueError(object)
+
+        # If our elements aren't a dictionary, or there's no offset
+        # to continue from, then just leave. This might be badly
+        # formatted anyways
+        if not isinstance(elements, dict) or not operator.contains(elements, b'/Prev'):
+            break
+
+        # Use the offset to find the next table
+        offset = int(elements[b'/Prev'].getValue())
+    return
+
 def do_readversion(pdf, version, path, parameters, bounds):
     stats = pdf.getStats()
 
@@ -239,7 +308,7 @@ def do_readversion(pdf, version, path, parameters, bounds):
     if parameters.fix_offsets:
         left, right = bounds
         print("Subtracting offset {:+#x} from trailer stream offset ({:+#x})".format(left, stream.getLastCrossRefSection()))
-        stream.setLastCrossRefSection(right - stream.getLastCrossRefSection())
+        stream.setLastCrossRefSection(stream.getLastCrossRefSection() - left)
 
     stream_name = '.'.join(["{:d}_trailer".format(1 + index), 'xref'])
     with open(os.path.join(path, stream_name), 'wb') as out:
@@ -247,23 +316,70 @@ def do_readversion(pdf, version, path, parameters, bounds):
         out.write('\n')
     return True
 
+def collect_objects(pdf, revision, path, parameters):
+    stats = pdf.getStats()
+
+    objects = {}
+    _, items = stats['Versions'][revision]['Objects']
+    for index in items:
+        object = pdf.getObject(index, version=revision)
+        objects[index] = object
+
+    return objects
+
+def dump_objects(parameters, path, trailer, xreftables, objects):
+    pass
+
 def do_readpdf(infile, parameters):
     P, bounds = ParsePDF(infile)
     position = P.getOffsets()
     stats = P.getStats()
 
     if len(stats['Versions']) != len(parameters.directory):
-        count = len(stats['Version'])
+        count = len(stats['Versions'])
         print("The input document that was specified ({:s}) contains {:d} individual trailers!".format(infile, count))
         print('')
         print("Please provide {:d} paths to extract each trailer into in order to continue!".format(count))
         print('')
         raise ValueError("Only {:d} directories were provided...".format(len(parameters.directory)))
 
-    for i, path in enumerate(parameters.directory):
+    # Go through every single revision and extract the boundaries of all our
+    # objects into a table. This way we can use it to find any version of an
+    # object parsed by peepdf. This seems to be the best way to deal with all
+    # of these weirdly formatted PDFs and still remain compatible with the
+    # way the author of peepdf wrote his tool.
+
+    table, iterable = {}, [ read_revision(P, version, bounds[version]) for version in range(len(P.body)) ]
+    [ table.update(item) for item in iterable ]
+
+    # Now we should have all of our streams, and we should be able to figure out
+    # the correct trailer for a particular revision.
+    for version in range(len(P.body)):
+        stream, section = P.trailer[version]
+        offset = stream.getLastCrossRefSection()
+        if not operator.contains(table, offset):
+            print("Unable to locate stream for trailer {:d} at offset {:+#x}".format(version, offset))
+            continue
+        continue
+
+    # Now we can iterate through all the objects in a given version.
+    for version in range(len(P.body)):
+        _, trailer = find_trailermeta(table, P.trailer[version])
+        #print hex(offset), PDFEncode(trailer)
+        for object in get_xrefs(P.trailer[version], table):
+            print object
+        #revision, _, trailer, size = X
+        #print trailer.toFile()
+
+    return 0
+    for version, path in enumerate(parameters.directory):
         if not os.path.isdir(path):
             raise OSError(path)
-        do_readversion(P, i, path, parameters, bounds=bounds[i])
+        #print 0, P.trailer[i][0].offset, P.trailer[i][0].getLastCrossRefSection(), bounds[i]
+        #do_readversion(P, i, path, parameters, bounds=bounds[i])
+
+        # FIXME
+        res = read_revision(P, version, bounds[version])
 
     return 0
 
@@ -538,6 +654,9 @@ def process_xrefs(trailer, objects, indices, offset=0):
         table.append((bounds, index))
         offset += size
 
+    print table
+    print trailer[1]
+
     # we're going to sort our /Prev offsets because this is intended to be
     # incrementally updated, so we should be able to figure out what our
     # chain will look like by moonwalking this data.
@@ -635,6 +754,7 @@ def do_writepdf(outfile, parameters):
     index = next(index for index in sorted(trailers))
     xavailable = find_xrefs(objects)
     xstreams = process_xrefs(trailers[index], objects, xavailable, offset=offset)
+    print xtreams
 
     # if we couldn't find a starting xref, then we'll force the last object
     # to be one by removing it's /Prev field
