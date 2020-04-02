@@ -435,13 +435,11 @@ def do_readpdf(infile, parameters):
 
     return 0
 
-def object_size(objects, index, generation=0):
-    _, obj = objects[index]
-
+def object_size(object, index, generation=0):
     # we need to calculate this ourselves because peepdf doesn't expose this
     # to us in any form. the author instead hardcodes this calculation
     fmt = '{:d} {:d} obj\n{:s}\nendobj\n'.format
-    return len(fmt(index, generation, obj.toFile()))
+    return len(fmt(index, generation, object.toFile()))
 
 def collect_files(paths):
     result, xrefs, trailers = {}, {}, []
@@ -479,6 +477,7 @@ def collect_files(paths):
 
                 else:
                     xrefs.setdefault(int(index), []).append(item)
+                    continue
 
             print("Skipping path due to invalid xref filename: {:s}".format(item))
             continue
@@ -579,7 +578,7 @@ def load_body(pairs):
 
             meta, data = PDFDecode(metadict), open(contentfile, 'rb').read()
 
-            # the other of peepdf seems to smoke crack, so we'll explicitly
+            # the author of peepdf seems to smoke crack, so we'll explicitly
             # modify the fields to get his shit to work...
             stream = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
             stream.elements = meta.getElements()
@@ -599,21 +598,38 @@ def load_body(pairs):
         continue
     return body
 
-def load_trailers(pairs):
+def load_xrefs(pairs):
     result = {}
     for index in sorted(pairs):
         metafile, xreftable = pairs[index]
 
-        metadict = json.load(open(metafile, 'rt'))
-        meta = PDFDecode(metadict)
+        # Load any metadata that was specified
+        if metafile is not None:
+            metadict = json.load(open(metafile, 'rt'))
+            meta = PDFDecode(metadict)
 
-        if xreftable is None:
-            result[index] = meta, None
-            continue
+        else:
+            meta = None
 
+        # Read our file and remember its filter type...Never forget.
+        _, res = os.path.splitext(xreftable)
+        _, filter = res.split('.', 1)
         data = open(xreftable, 'rb').read()
-        result[index] = meta, data
 
+        # Re-construct the object stream so that we can leverage
+        # peepdf to re-encode our data with the filter specified
+        # by the user.
+        stream = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
+        stream.elements = meta.getElements()
+        stream.decodedStream = data
+
+        if filter.lower() == u'binary':
+            result[index] = None, stream
+
+        stream.isEncodedStream = True
+        stream.filter = PDFCore.PDFName("/{:s}".format(filter))
+        stream.encode()
+        result[index] = stream.filter, stream
     return result
 
 def update_body(objects):
@@ -705,60 +721,7 @@ def find_xrefs(objects):
         result.append(index)
     return result
 
-def process_xrefs(trailer, objects, indices, offset=0):
-    table = []
-    for index in sorted(objects):
-        _, obj = objects[index]
-        size = object_size(objects, index)
-        bounds = offset, offset + size
-        table.append((bounds, index))
-        offset += size
-
-    print table
-    print trailer[1]
-
-    # we're going to sort our /Prev offsets because this is intended to be
-    # incrementally updated, so we should be able to figure out what our
-    # chain will look like by moonwalking this data.
-    resultheap = []
-    for index in indices:
-        _, obj = objects[index]
-        meta = obj.getElements()
-        if operator.contains(meta, b'/Prev'):
-            heapq.heappush(resultheap, (int(meta[b'/Prev'].getValue()), index))
-        else:
-            heapq.heappush(resultheap, (None, index))
-        continue
-
-    # if we found no streams, then return nothing because we'll need to add
-    # our table in the trailer.
-    if len(resultheap) == 0:
-        return []
-
-    # now that things are sorted, let's figure out which objects that each
-    # offset points to
-    refs = {}
-    for _, index in resultheap:
-        _, obj = objects[index]
-        offset = int(meta[b'/Prev'].getValue())
-        found = next((index for (left, right), index in table if left <= offset < right), None)
-        if found is None:
-            print("Warning: Unable to find index for offset {:+#x} referenced by object {:d}".format(offset, index))
-            continue
-        refs[index] = found
-
-    # okay, now we can figure out which order this goes
-    current, result = start, [start]
-    while current is not None:
-        if not operator.contains(refs, current):
-            break
-        result.append(refs[current])
-        current = refs[current]
-    if result[-1] is not None:
-        print("Warnings: XRef streams reference a stream that does not exist!")
-    return result
-
-def calculate_xrefs(objects, offset=0):
+def calculate_xrefs(objects, base=0, offset=0):
     bounds = 0, max(sorted(objects))
 
     # first build a slot table so we can figure out which objects
@@ -782,8 +745,7 @@ def calculate_xrefs(objects, offset=0):
         _, obj = objects[index]
         xref = PDFCore.PDFCrossRefEntry(offset, 0, 'n')
         result.append(xref)
-        #offset += len(obj.getRawValue())
-        offset += object_size(objects, index)
+        offset += object_size(obj, base + index)
     return result + [PDFCore.PDFCrossRefEntry(offset, 0, 'n')]
 
 def do_writepdf(outfile, parameters):
@@ -792,10 +754,7 @@ def do_writepdf(outfile, parameters):
     object_files, trailer_files, xref_files = collect_files(parameters.files)
     object_pairs = pairup_files(object_files)
     xref_pairs = pairup_xrefs(xref_files)
-    print object_files
-    print trailer_files
-    print xref_pairs
-    return 0
+
     # create our pdf instance
     HEADER = '%PDF-X.x\n'
 
@@ -807,17 +766,53 @@ def do_writepdf(outfile, parameters):
         P.binaryChars = parameters.set_binary
     offset = 0x11
 
-    # build our pdf body and update it if necessary
+    # Load our pdf body and update it if necessary
     objects = load_body(object_pairs)
     if parameters.update_metadata:
         objects = update_body(objects)
+    xrefs_body = calculate_xrefs(objects, 0, offset)
 
-    # find all our previous xrefs
-    trailers = load_trailers(trailer_pairs)
-    index = next(index for index in sorted(trailers))
-    xavailable = find_xrefs(objects)
-    xstreams = process_xrefs(trailers[index], objects, xavailable, offset=offset)
-    print xtreams
+    # Now to build this thing...
+    body = PDFCore.PDFBody()
+    body.setNextOffset(offset)
+    for index in sorted(objects):
+        _, obj = objects[index]
+        if xrefs_body[index].objectOffset != body.getNextOffset():
+            raise AssertionError((body.getNextOffset(), xrefs_body[index].objectOffset))
+        body.setObject(id=index, object=obj)
+
+    # Load the xrefs that were provided by the user
+    xrefs = load_xrefs(xref_pairs)
+    xrefs_user = calculate_xrefs(xrefs, len(xrefs_body), offset=body.getNextOffset())
+
+    if parameters.update_xrefs:
+        PDFCore.PDFCrossRefEntry(0, 0xffff, 'f')
+        raise NotImplementedError
+
+    # Add them to the body
+    for index in sorted(xrefs):
+        _, obj = xrefs[index]
+        if table[index].objectOffset != body.getNextOffset():
+            raise AssertionError((body.getNextOffset(), table[index].objectOffset))
+        body.setObject(id=index + len(xreftable), object=obj)
+
+    # ...and then update all the objects/streams we added as per peepdf's method
+    P.addBody(body)
+    P.addNumObjects(body.getNumObjects())
+    P.addNumObjects(body.getNumStreams())
+    P.addNumEncodedStreams(body.getNumEncodedStreams())
+    P.addNumDecodingErrors(body.getNumDecodingErrors())
+
+    # now we can start adding our xref stuff
+    p.addCrossrefTableSection([None, None])
+
+    # Lastly...the trailer, which should point to our table.
+    trailer = PDFCore.PDFTrailer(trailer_meta, body.getNextOffset())
+    trailer.setLastCrossRefSection(xrefs[xstreams[0]].objectOffset)
+    trailer.setNumObjects(len(xrefs))
+    print trailer.toFile()
+
+    return 0
 
     # if we couldn't find a starting xref, then we'll force the last object
     # to be one by removing it's /Prev field
@@ -829,18 +824,6 @@ def do_writepdf(outfile, parameters):
             obj.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue()
             obj.elements = meta
             xstreams.append(None)
-
-    # okay, now we finally have a place to start. so calculate our initial
-    # xrefs for each object that we're going to keep.
-    xrefs = calculate_xrefs(objects, offset=offset)
-
-    # I think that was it...so we can now finally rebuild the body
-    body = PDFCore.PDFBody()
-    body.setNextOffset(offset)
-    for index in sorted(objects):
-        _, obj = objects[index]
-        assert xrefs[index].objectOffset == body.getNextOffset()
-        body.setObject(id=index, object=obj)
 
     # If we were asked to update our xrefs, then we'll need to add just
     # one more object here..
@@ -864,20 +847,6 @@ def do_writepdf(outfile, parameters):
 
     else:
         _, table = objects[xstreams[0]]
-
-    # Okay, back to the PDFFile. Now we can start building things...
-    P.addBody(body)
-    P.addNumObjects(body.getNumObjects())
-    P.addNumObjects(body.getNumStreams())
-    P.addNumEncodedStreams(body.getNumEncodedStreams())
-    P.addNumDecodingErrors(body.getNumDecodingErrors())
-    P.addCrossRefTableSection([table, None])
-
-    # Lastly...the trailer, which should point to our table.
-    trailer = PDFCore.PDFTrailer(trailer_meta, body.getNextOffset())
-    trailer.setLastCrossRefSection(xrefs[xstreams[0]].objectOffset)
-    trailer.setNumObjects(len(xrefs))
-    print trailer.toFile()
 
     return 0
     #if parameters.update_xrefs:
