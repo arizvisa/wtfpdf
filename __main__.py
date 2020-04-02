@@ -36,6 +36,8 @@ def PDFEncode(element):
     elif isinstance(element, PDFCore.PDFDictionary):
         iterable = element.getElements()
         return { str(name) : PDFEncode(item) for name, item in iterable.items() }
+    elif isinstance(element, PDFCore.PDFBool):
+        return bool(element)
     raise TypeError(element)
 
 def PDFDecode(instance):
@@ -53,6 +55,9 @@ def PDFDecode(instance):
 
     elif isinstance(instance, float):
         return PDFCore.PDFNum("{:f}".format(instance))
+
+    elif isinstance(instance, bool):
+        return PDFCore.PDFBool("{!s}".format(instance).lower())
 
     elif isinstance(instance, six.integer_types):
         return PDFCore.PDFNum("{:d}".format(instance))
