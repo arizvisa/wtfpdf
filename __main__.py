@@ -208,31 +208,62 @@ def read_revision(pdf, revision, bounds):
         continue
     return result
 
-def find_trailermeta(table, trailer):
+def find_trailermeta(trailer):
     stream, section = trailer
     if section is not None:
         selected = section if len(section.getTrailerDictionary().getElements()) else stream
     else:
         selected = stream
-    return selected.getLastCrossRefSection(), selected.getTrailerDictionary()
+
+    # Give XRefStm priority if that's what's in the trailer dictionary
+    meta = selected.getTrailerDictionary()
+    elements = meta.getElements()
+    return int(elements[b'XRefStm'].getValue()) if operator.contains(elements, b'XRefStm') else selected.getLastCrossRefSection(), meta, selected
+
+def find_previous_offset(offset, list):
+    if len(list) == 1:
+        return list[0]
+
+    # divide-and-conquer to find the object that an offset is pointing into
+    center = len(list) // 2
+    if offset > list[center]:
+        return find_previous_offset(offset, list[center:])
+    return find_previous_offset(offset, list[:center])
 
 def get_xrefs(trailer, table):
-    offset, _ = find_trailermeta(table, trailer)
+    offset, _, object = find_trailermeta(trailer)
     if not operator.contains(table, offset):
         return
 
-    while operator.contains(table, offset):
-        revision, _, object, size = table[offset]
-        yield object
+    while True:
 
-        # If our offset points at a trailer, then check its dictionary
-        # to see what's next
+        # If we can't find the offset in our table, then seek backwards until
+        # we find one that matches.
+        if not operator.contains(table, offset):
+            offset = find_previous_offset(offset, sorted(table))
+        revision, _, object, size = table[offset]
+
+        # Ensure that it's of a valid type.
+        if not isinstance(object, (PDFCore.PDFTrailer, PDFCore.PDFStream, PDFCore.PDFCrossRefSection)):
+            print("Warning: Offset ({:#x}) from trailer points to object of type {!s}".format(offset, object.__class__))
+            break
+
+        # If we're pointing at another PDFTrailer, then check if there's an
+        # XRefStm to move onto...if not, then this contains our xref table
+        # in its stream.
         if isinstance(object, PDFCore.PDFTrailer):
             meta = object.getTrailerDictionary()
             elements = meta.getElements()
+            if operator.contains(elements, b'/XRefStm'):
+                offset = int(elements[b'XRefStm'].getValue())
+                continue
+            offset = object.getLastCrossRefSection()
+            continue
+
+        yield object
 
         # If we found a stream, then we can keep going
-        elif isinstance(object, PDFCore.PDFStream):
+        if isinstance(object, PDFCore.PDFStream):
             elements = object.getElements()
 
         # Getting to a crossrefsection means that we're done here
@@ -254,9 +285,6 @@ def get_xrefs(trailer, table):
 
 def do_readversion(pdf, version, path, parameters, bounds):
     stats = pdf.getStats()
-
-    Fstream = operator.methodcaller('getRawStream' if parameters.compressed else 'getStream')
-    Felement = operator.methodcaller('getRawValue' if parameters.compressed else 'getValue')
 
     _, items = stats['Versions'][version]['Objects']
     for index in items:
@@ -327,8 +355,88 @@ def collect_objects(pdf, revision, path, parameters):
 
     return objects
 
-def dump_objects(parameters, path, trailer, xreftables, objects):
-    pass
+def dump_stream(object, path_fmt, compressed=False):
+    stats = object.getStats()
+
+    # Figure out whether there were any parsing errors, because
+    # if there was..then we just dump the stream as-is.
+    if stats.get('Decoding Errors', False) or compressed:
+        Fgetstream = operator.methodcaller('getRawStream')
+        suffix = 'Binary'
+
+    # Otherwise, we can decode to stream and write it to our path
+    else:
+        Fgetstream = operator.methodcaller('getStream')
+        suffix = stats.get('Filters', 'Binary').translate(None, '/')
+
+    stream = Fgetstream(object)
+    with open(path_fmt(ext=suffix), 'wb') as out:
+        out.write(stream)
+    return len(stream)
+
+def dump_objects(pdf, revision, path, compressed=False):
+    stats = pdf.getStats()
+
+    result = []
+    _, items = stats['Versions'][revision]['Objects']
+    for index in items:
+        object = pdf.getObject(index, version=revision)
+        stats = object.getStats()
+
+        Fobjectname = "{:d}_0_obj".format
+        Fdump = functools.partial(json.dump, encoding=PDFCodec.name, indent=4, sort_keys=True)
+        Ftypename = lambda element: element.__class__.__name__
+
+        # If there were any errors, then notify the user.
+        if stats['Errors'] and int(stats['Errors']) > 0:
+            print("Errors in revision {:d} ({:s}) with {:s}: {:d}".format(revision, path, Fobjectname(index), int(stats['Errors'])))
+
+        # Otherwise, aggregate the object index into our success list
+        else:
+            result.append(index)
+
+        # This object is a stream, and so we'll need to dump its
+        # contents into a file.
+        if isinstance(object, PDFCore.PDFStream):
+            stream_fmt = functools.partial("{:s}.{ext:s}".format, os.path.join(path, Fobjectname(index)))
+            dump_stream(object, stream_fmt, compressed)
+
+        # Each object should have a dictionary or a list, so encode it
+        # into json, so we can dump it to a file
+        elements = PDFEncode(object)
+
+        elements_name = '.'.join([Fobjectname(index), 'json'])
+        Fdump(elements, open(os.path.join(path, elements_name), 'wt'))
+    return result
+
+def dump_trailer(pdf, revision, path):
+    Fdump = functools.partial(json.dump, encoding=PDFCodec.name, indent=4, sort_keys=True)
+
+    # Grab our trailer dictionary, and encode it.
+    _, meta, _ = find_trailermeta(pdf.trailer[revision])
+    elements = PDFEncode(meta)
+
+    # Now just to write this thing somewhere...
+    elements_name = '.'.join(['trailer', 'json'])
+    Fdump(elements, open(os.path.join(path, elements_name), 'wt'))
+    return True
+
+def dump_xrefs(pdf, revision, table, path):
+    iterable = get_xrefs(pdf.trailer[revision], table)
+    for index, xref in enumerate(iterable):
+        Fxrefname = "xref_{:d}".format
+        name_fmt = functools.partial("{:s}.{ext:s}".format, os.path.join(path, Fxrefname(index)))
+
+        # If it's a stream, then write it uncompressed to our file
+        if isinstance(xref, PDFCore.PDFStream):
+            dump_stream(xref, name_fmt, compressed=False)
+            continue
+
+        # Otherwise, we need to trust peepdf's .toFile() method
+        with open(name_fmt('Binary'), 'wb') as out:
+            out.write(xref.toFile())
+        continue
+    return
 
 def do_readpdf(infile, parameters):
     P, bounds = ParsePDF(infile)
@@ -362,24 +470,17 @@ def do_readpdf(infile, parameters):
             continue
         continue
 
-    # Now we can iterate through all the objects in a given version.
+    # Now we can iterate through all the objects in a given revision,
+    # and write them into the directory provided by the user.
     for version in range(len(P.body)):
-        _, trailer = find_trailermeta(table, P.trailer[version])
-        #print hex(offset), PDFEncode(trailer)
-        for object in get_xrefs(P.trailer[version], table):
-            print object
-        #revision, _, trailer, size = X
-        #print trailer.toFile()
-
-    return 0
-    for version, path in enumerate(parameters.directory):
+        path = parameters.directory[version]
         if not os.path.isdir(path):
-            raise OSError(path)
-        #print 0, P.trailer[i][0].offset, P.trailer[i][0].getLastCrossRefSection(), bounds[i]
-        #do_readversion(P, i, path, parameters, bounds=bounds[i])
+            print("Skipping revision {:d} due to output path not being a directory: {:s}".format(version, path))
+            continue
 
-        # FIXME
-        res = read_revision(P, version, bounds[version])
+        dump_objects(P, version, path, compressed=parameters.compressed)
+        dump_trailer(P, version, path)
+        dump_xrefs(P, version, table, path)
 
     return 0
 
