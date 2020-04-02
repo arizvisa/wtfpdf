@@ -366,6 +366,10 @@ def dump_trailer(pdf, revision, path):
     return True
 
 def dump_xrefs(pdf, revision, table, path):
+    Fdump = functools.partial(json.dump, encoding=PDFCodec.name, indent=4, sort_keys=True)
+
+    # Iterate through all of our xrefs that we snagged, and start
+    # writing them to disk..
     iterable = get_xrefs(pdf.trailer[revision], table)
     for index, xref in enumerate(iterable):
         Fxrefname = "xref_{:d}".format
@@ -374,6 +378,9 @@ def dump_xrefs(pdf, revision, table, path):
         # If it's a stream, then write it uncompressed to our file
         if isinstance(xref, PDFCore.PDFStream):
             dump_stream(xref, name_fmt, compressed=False)
+            elements = PDFEncode(xref)
+            elements_name = name_fmt(ext='json')
+            Fdump(elements, open(elements_name, 'wt'))
             continue
 
         # Otherwise, we need to trust peepdf's .toFile() method
@@ -437,7 +444,7 @@ def object_size(objects, index, generation=0):
     return len(fmt(index, generation, obj.toFile()))
 
 def collect_files(paths):
-    result, trailers = {}, {}
+    result, xrefs, trailers = {}, {}, []
     for item in paths:
         if not os.path.isfile(item):
             print("Skipping non-file path: {:s}".format(item))
@@ -447,13 +454,23 @@ def collect_files(paths):
 
         # validate our name format
         components = name.split('_')
-        if not operator.contains({2, 3}, len(components)):
+        if not operator.contains({1, 2, 3}, len(components)):
             print("Skipping path due to invalid format: {:s}".format(item))
             continue
 
-        if len(components) == 2:
-            index, trailer = components
+        # check if it's the trailer
+        if len(components) == 1:
+            trailer, = components
             if trailer == 'trailer':
+                trailers.append(item)
+            else:
+                print("Skipping path due to invalid trailer filename: {:s}".format(item))
+            continue
+
+        # check if it's an xref table
+        if len(components) == 2:
+            xref, index = components
+            if xref == 'xref':
                 try:
                     int(index)
 
@@ -461,10 +478,9 @@ def collect_files(paths):
                     pass
 
                 else:
-                    trailers.setdefault(int(index), []).append(item)
-                    continue
+                    xrefs.setdefault(int(index), []).append(item)
 
-            print("Skipping path due to invalid trailer format: {:s}".format(item))
+            print("Skipping path due to invalid xref filename: {:s}".format(item))
             continue
 
         # validate its components
@@ -479,7 +495,7 @@ def collect_files(paths):
             print("Skipping path due to invalid index: {:s}".format(item))
 
         result.setdefault(int(index), []).append(item)
-    return result, trailers
+    return result, trailers, xrefs
 
 def pairup_files(input):
     result = {}
@@ -516,10 +532,10 @@ def pairup_files(input):
 
     return result
 
-def pairup_trailers(input):
+def pairup_xrefs(input):
     result = {}
 
-    Ftrailername = "{:d}_trailer".format
+    Ftrailername = "xref_{:d}".format
     for index, files in input.items():
 
         # pair up our files
@@ -527,30 +543,29 @@ def pairup_trailers(input):
         for item in files:
             fullname = os.path.basename(item)
             name, ext = os.path.splitext(fullname)
-            if name != Ftrailername(index) or not operator.contains({'.json', '.xref'}, ext):
+            if name != Ftrailername(index):
                 print("Skipping path for trailer {:d} due to invalid name: {:s}".format(index, item))
                 continue
+
             if ext == '.json':
                 meta.append(item)
-            elif ext == '.xref':
-                xrefs.append(item)
             else:
-                raise ValueError(fullname, name, ext)
+                xrefs.append(item)
             continue
 
         # if no metafile was found, then skip this object
-        if len(meta) == 0:
-            print("Skipping trailer {:d} as no metafile was found: {!r}".format(index, meta))
+        if len(xrefs) == 0:
+            print("Skipping xref {:d} as no table was found: {!r}".format(index, xrefs))
             continue
 
         # warn the user if they provided more than one file for a single object
         if len(meta) > 1:
-            print("More than one metafile was specified for trailer {:d}: {!r}".format(index, meta))
+            print("More than one metafile was specified for xref {:d}: {!r}".format(index, meta))
 
         if len(xrefs) > 1:
-            print("More than one xref table was specified for trailer {:d}: {!r}".format(index, xrefs))
+            print("More than one table was specified for xref {:d}: {!r}".format(index, xrefs))
 
-        result[index] = (meta[0], xrefs[0] if len(xrefs) > 0 else None)
+        result[index] = (meta[0] if len(meta) else None, xrefs[0])
     return result
 
 def load_body(pairs):
@@ -774,10 +789,13 @@ def calculate_xrefs(objects, offset=0):
 def do_writepdf(outfile, parameters):
 
     # first collect all of our object names
-    object_files, trailer_files = collect_files(parameters.files)
+    object_files, trailer_files, xref_files = collect_files(parameters.files)
     object_pairs = pairup_files(object_files)
-    trailer_pairs = pairup_trailers(trailer_files)
-
+    xref_pairs = pairup_xrefs(xref_files)
+    print object_files
+    print trailer_files
+    print xref_pairs
+    return 0
     # create our pdf instance
     HEADER = '%PDF-X.x\n'
 
