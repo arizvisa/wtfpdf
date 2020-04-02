@@ -222,7 +222,7 @@ def object_size(objects, index, generation=0):
     # we need to calculate this ourselves because peepdf doesn't expose this
     # to us in any form. the author instead hardcodes this calculation
     fmt = '{:d} {:d} obj\n{:s}\nendobj\n'.format
-    return len(fmt(index, generation, obj.getRawValue()))
+    return len(fmt(index, generation, obj.toFile()))
 
 def collect_files(paths):
     result = {}
@@ -431,6 +431,11 @@ def process_xrefs(objects, indices, offset=0):
             heapq.heappush(resultheap, (None, index))
         continue
 
+    # if we found no streams, then return nothing because we'll need to add
+    # our table in the trailer.
+    if len(resultheap) == 0:
+        return [None]
+
     # first element should always be our end
     none, start = resultheap[0]
     if none is not None:
@@ -487,10 +492,7 @@ def calculate_xrefs(objects, offset=0):
         result.append(xref)
         #offset += len(obj.getRawValue())
         offset += object_size(objects, index)
-
-    # append our last empty slot
-    result.append(PDFCore.PDFCrossRefEntry(0, 0xffff, 'f'))
-    return result
+    return result + [PDFCore.PDFCrossRefEntry(offset, 0, 'n')]
 
 #import glob
 #files = glob.glob('work/*')
@@ -517,19 +519,19 @@ def do_writepdf(outfile, parameters):
         objects = update_body(objects)
 
     # find all our previous xrefs
-    available = find_xrefs(objects)
-    streams = process_xrefs(objects, available, offset=offset)
+    xavailable = find_xrefs(objects)
+    xstreams = process_xrefs(objects, xavailable, offset=offset)
 
     # if we couldn't find a starting xref, then we'll force the last object
     # to be one by removing it's /Prev field
     if parameters.update_xrefs:
-        if not operator.contains(streams, None):
-            _, obj = objects[streams[-1]]
+        if not operator.contains(xstreams, None):
+            _, obj = objects[xstreams[-1]]
             meta = obj.getElements()
             meta.pop(b'/Prev')
             obj.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue()
             obj.elements = meta
-            streams.append(None)
+            xstreams.append(None)
 
     # okay, now we finally have a place to start. so calculate our initial
     # xrefs for each object that we're going to keep.
@@ -540,7 +542,45 @@ def do_writepdf(outfile, parameters):
     body.setNextOffset(offset)
     for index in sorted(objects):
         _, obj = objects[index]
+        assert xrefs[index].objectOffset == body.getNextOffset()
         body.setObject(id=index, object=obj)
+
+    # If we were asked to update our xrefs, then we'll need to add just
+    # one more object here..
+    if params.update_xrefs and parameters.set_version <= 1.5:
+        xrefs.append(PDFCore.PDFCrossRefEntry(body.getNextOffset(), 0, 'n'))
+        xrefs.append(PDFCore.PDFCrossRefEntry(0, 0xffff, 'f'))
+
+        # append our last empty slot
+        section = PDFCore.PDFCrossRefSubSection(0, len(xrefs), xrefs)
+
+        # now to build a fucking table
+        table = PDFCore.PDFCrossRefSection()
+        table.addSubsection(section)
+
+        trailer_meta = PDFCore.PDFDictionary({})
+        trailer_meta.setElement(b'/Size', PDFDecode(len(xrefs)))
+        # FIXME
+
+    elif parameters.update_xrefs:
+        raise NotImplementedError
+
+    else:
+        _, table = objects[xstreams[0]]
+
+    # Okay, back to the PDFFile. Now we can start building things...
+    P.addBody(body)
+    P.addNumObjects(body.getNumObjects())
+    P.addNumObjects(body.getNumStreams())
+    P.addNumEncodedStreams(body.getNumEncodedStreams())
+    P.addNumDecodingErrors(body.getNumDecodingErrors())
+    P.addCrossRefTableSection([table, None])
+
+    # Lastly...the trailer, which should point to our table.
+    trailer = PDFCore.PDFTrailer(trailer_meta, body.getNextOffset())
+    trailer.setLastCrossRefSection(xrefs[xstreams[0]].objectOffset)
+    trailer.setNumObjects(len(xrefs))
+    print trailer.toFile()
 
     return 0
     #if parameters.update_xrefs:
