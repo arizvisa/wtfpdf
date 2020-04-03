@@ -567,16 +567,23 @@ def pairup_xrefs(input):
         result[index] = (meta[0] if len(meta) else None, xrefs[0])
     return result
 
-def load_stream(infile, meta=PDFDecode({})):
+def load_stream(infile, meta=None):
     _, res = os.path.splitext(infile)
     _, filter = res.split('.', 1)
 
     data = open(infile, 'rb').read()
 
+    # If there's no mta dictionary, then don't bother creating it.
+    if meta is None:
+        stream = PDFCore.PDFObjectStream()
+
     # The author of peepdf seems to smoke crack, so we'll explicitly
     # modify the fields to get his shit to work...
-    stream = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
-    stream.elements = meta.getElements()
+    else:
+        if not meta.getElements():
+            raise ValueError
+        stream = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
+        stream.elements = meta.getElements()
     stream.decodedStream = data
 
     # If the suffix is ".Binary", then this is just a raw file with
@@ -606,18 +613,19 @@ def load_stream(infile, meta=PDFDecode({})):
 def load_body(pairs):
     body = {}
     for index, (metafile, contentfile) in pairs.items():
-        metadict = json.load(open(metafile, 'rt'))
+        meta = json.load(open(metafile, 'rt')) or {}
 
         if contentfile:
             try:
-                filter_and_stream = load_stream(contentfile, PDFDecode(metadict))
+                filter_and_stream = load_stream(contentfile, PDFDecode(meta))
+
             except NotImplementedError as E:
                 print("Unable to load content (\"{:s}\") for object {:d}".format(contentfile, index))
                 raise E
             body[index] = filter_and_stream
 
         else:
-            body[index] = None, PDFDecode(metadict)
+            body[index] = None, PDFDecode(meta)
         continue
     return body
 
@@ -633,11 +641,12 @@ def load_xrefs(pairs):
         # Load any metadata that was specified
         else:
             metadict = json.load(open(metafile, 'rt'))
-            meta = PDFDecode(metadict)
+            meta = None if metadict is None else PDFDecode(metadict)
 
         # Read our file and remember its filter type...Never forget.
         try:
-            filter_and_stream = load_stream(xfilename, PDFDecode(meta or {}))
+            filter_and_stream = load_stream(xfilename, None if meta is None else PDFDecode(meta))
+
         except NotImplementedError as E:
             print("Unable to load content (\"{:s}\") for xref {:d}".format(contentfile, index))
             raise E
@@ -787,13 +796,16 @@ def update_xrefs(objects, offset):
 
     # Go back through the objects and repair the offsets
     indices = sorted(objects)
-    for index in indices[1:]:
-        _, obj = objects[index]
+    for ci, ni in zip(indices[:-1], indices[1:]):
+        _, co = objects[ci]
+        _, no = objects[ni]
 
-        if isinstance(obj, PDFCore.PDFObjectStream):
-            meta = obj.getElements()
+        meta = no.getElements()
+        meta[b'/Prev'] = PDFCore.PDFNum(str(offset))
+        no.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue()
+        no.elements = meta
 
-        offset += object_size(obj, index)
+        offset += object_size(co, index)
     return objects
 
 def find_xrefs(objects):
