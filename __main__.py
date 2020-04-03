@@ -309,9 +309,15 @@ def dump_stream(object, path_fmt, compressed=False):
         suffix = 'Binary'
 
     # Otherwise, we can decode to stream and write it to our path
-    else:
+    elif isinstance(object.filter, PDFCore.PDFName):
         Fgetstream = operator.methodcaller('getStream')
-        suffix = stats.get('Filters', 'Binary').translate(None, '/')
+        filter = object.filter.getValue()
+        suffix = filter.translate(None, '/')
+
+    elif isinstance(object.filter, PDFCore.PDFArray):
+        Fgetstream = operator.methodcaller('getStream')
+        filters = [ item.getValue() for item in object.filter.getElements() ]
+        suffix = ','.join(item.translate(None, '/') for item in filters) + ('' if len(filters) > 1 else ',')
 
     stream = Fgetstream(object)
     with open(path_fmt(ext=suffix), 'wb') as out:
@@ -567,31 +573,48 @@ def pairup_xrefs(input):
         result[index] = (meta[0] if len(meta) else None, xrefs[0])
     return result
 
+def load_stream(infile, meta=PDFDecode({})):
+    _, res = os.path.splitext(infile)
+    _, filter = res.split('.', 1)
+
+    data = open(infile, 'rb').read()
+
+    # The author of peepdf seems to smoke crack, so we'll explicitly
+    # modify the fields to get his shit to work...
+    stream = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
+    stream.elements = meta.getElements()
+    stream.decodedStream = data
+
+    # If the suffix is ".Binary", then this is just a raw file with
+    # no filter attached.
+    if filter.lower() == u'binary':
+        return None, stream
+
+    # If there's a ',' in the suffix, then this is an array. Split
+    # across the ',' and make a PDFArray filter.
+    if operator.contains(filter, ','):
+        filters = filter.split(',')
+        elements = [ PDFCore.PDFName("/{:s}".format(filter)) for filter in filters ]
+        stream.filter = PDFCore.PDFArray(elements=elements)
+
+    # Otherwise, it's just a straight-up PDFName
+    else:
+        stream.filter = PDFCore.PDFName("/{:s}".format(filter))
+
+    # Our stream is encoded, so set the correct fields explicitly, and
+    # ask peepdf to encode it for us.
+    stream.isEncodedStream = True
+    stream.encode()
+    return stream.filter, stream
+
 def load_body(pairs):
     body = {}
     for index, (metafile, contentfile) in pairs.items():
         metadict = json.load(open(metafile, 'rt'))
 
         if contentfile:
-            _, res = os.path.splitext(contentfile)
-            _, filter = res.split('.', 1)
-
-            meta, data = PDFDecode(metadict), open(contentfile, 'rb').read()
-
-            # the author of peepdf seems to smoke crack, so we'll explicitly
-            # modify the fields to get his shit to work...
-            stream = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
-            stream.elements = meta.getElements()
-            stream.decodedStream = data
-
-            if filter.lower() == u'binary':
-                body[index] = None, stream
-                continue
-
-            stream.isEncodedStream = True
-            stream.filter = PDFCore.PDFName("/{:s}".format(filter))
-            stream.encode()
-            body[index] = stream.filter, stream
+            filter_and_stream = load_stream(contentfile, PDFDecode(metadict))
+            body[index] = filter_and_stream
 
         else:
             body[index] = None, PDFDecode(metadict)
@@ -601,35 +624,20 @@ def load_body(pairs):
 def load_xrefs(pairs):
     result = {}
     for index in sorted(pairs):
-        metafile, xreftable = pairs[index]
+        metafile, xfilename = pairs[index]
+
+        # If there's no metafile, then no need to do anything here
+        if metafile is None:
+            meta = None
 
         # Load any metadata that was specified
-        if metafile is not None:
+        else:
             metadict = json.load(open(metafile, 'rt'))
             meta = PDFDecode(metadict)
 
-        else:
-            meta = None
-
         # Read our file and remember its filter type...Never forget.
-        _, res = os.path.splitext(xreftable)
-        _, filter = res.split('.', 1)
-        data = open(xreftable, 'rb').read()
-
-        # Re-construct the object stream so that we can leverage
-        # peepdf to re-encode our data with the filter specified
-        # by the user.
-        stream = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
-        stream.elements = meta.getElements()
-        stream.decodedStream = data
-
-        if filter.lower() == u'binary':
-            result[index] = None, stream
-
-        stream.isEncodedStream = True
-        stream.filter = PDFCore.PDFName("/{:s}".format(filter))
-        stream.encode()
-        result[index] = stream.filter, stream
+        filter_and_stream = load_stream(xfilename, PDFDecode(meta or {}))
+        result[index] = filter_and_stream
     return result
 
 def load_trailer(infile):
