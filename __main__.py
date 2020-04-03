@@ -295,7 +295,7 @@ def dump_stream(object, path_fmt, compressed=False):
 
     # Figure out whether there were any parsing errors, because
     # if there was..then we just dump the stream as-is.
-    if stats.get('Decoding Errors', False) or compressed:
+    if object.filter in {None} or compressed or stats.get('Decoding Errors', False):
         Fgetstream = operator.methodcaller('getRawStream')
         suffix = 'Binary'
 
@@ -309,6 +309,9 @@ def dump_stream(object, path_fmt, compressed=False):
         Fgetstream = operator.methodcaller('getStream')
         filters = [ item.getValue() for item in object.filter.getElements() ]
         suffix = ','.join(item.translate(None, '/') for item in filters) + ('' if len(filters) > 1 else ',')
+
+    else:
+        raise TypeError(object.filter)
 
     stream = Fgetstream(object)
     with open(path_fmt(ext=suffix), 'wb') as out:
@@ -381,7 +384,7 @@ def dump_xrefs(pdf, revision, table, path):
             continue
 
         # Otherwise, we need to trust peepdf's .toFile() method
-        with open(name_fmt('Binary'), 'wb') as out:
+        with open(name_fmt(ext='Binary'), 'wb') as out:
             out.write(xref.toFile())
         continue
     return
@@ -783,12 +786,14 @@ def update_xrefs(objects, offset):
         obj.elements = meta
 
     # Go back through the objects and repair the offsets
-    for index in sorted(objects):
+    indices = sorted(objects)
+    for index in indices[1:]:
         _, obj = objects[index]
 
-        if not isinstance(obj, PDFCore.PDFObjectStream):
-            continue
-        meta = obj.getElements()
+        if isinstance(obj, PDFCore.PDFObjectStream):
+            meta = obj.getElements()
+
+        offset += object_size(obj, index)
     return objects
 
 def find_xrefs(objects):
