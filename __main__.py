@@ -95,15 +95,6 @@ def PDFDecode(instance):
         return PDFCore.PDFString(res)
     raise TypeError(instance)
 
-def fakeencode(filter, meta, data):
-    res = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
-    res.elements = meta.getElements()
-    res.decodedStream = data
-    res.isEncodedStream = True
-    res.filter = PDFCore.PDFName("/{:s}".format(filter))
-    res.encode()
-    return res.encodedStream
-
 def do_listpdf(infile, parameters):
     P, _ = ParsePDF(infile)
     stats = P.getStats()
@@ -594,7 +585,7 @@ def load_stream(infile, meta=PDFDecode({})):
     # across the ',' and make a PDFArray filter.
     if operator.contains(filter, ','):
         filters = filter.split(',')
-        elements = [ PDFCore.PDFName("/{:s}".format(filter)) for filter in filters ]
+        elements = [ PDFCore.PDFName("/{:s}".format(filter)) for filter in filters if filter]
         stream.filter = PDFCore.PDFArray(elements=elements)
 
     # Otherwise, it's just a straight-up PDFName
@@ -604,7 +595,9 @@ def load_stream(infile, meta=PDFDecode({})):
     # Our stream is encoded, so set the correct fields explicitly, and
     # ask peepdf to encode it for us.
     stream.isEncodedStream = True
-    stream.encode()
+    wtf, you = stream.encode()
+    if wtf:
+        raise NotImplementedError(you)
     return stream.filter, stream
 
 def load_body(pairs):
@@ -613,7 +606,11 @@ def load_body(pairs):
         metadict = json.load(open(metafile, 'rt'))
 
         if contentfile:
-            filter_and_stream = load_stream(contentfile, PDFDecode(metadict))
+            try:
+                filter_and_stream = load_stream(contentfile, PDFDecode(metadict))
+            except NotImplementedError as E:
+                print("Unable to load content (\"{:s}\") for object {:d}".format(contentfile, index))
+                raise E
             body[index] = filter_and_stream
 
         else:
@@ -636,7 +633,11 @@ def load_xrefs(pairs):
             meta = PDFDecode(metadict)
 
         # Read our file and remember its filter type...Never forget.
-        filter_and_stream = load_stream(xfilename, PDFDecode(meta or {}))
+        try:
+            filter_and_stream = load_stream(xfilename, PDFDecode(meta or {}))
+        except NotImplementedError as E:
+            print("Unable to load content (\"{:s}\") for xref {:d}".format(contentfile, index))
+            raise E
         result[index] = filter_and_stream
     return result
 
