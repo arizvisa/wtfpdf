@@ -12,6 +12,29 @@ def ParsePDF(infile):
     bounds = [(right - len(content), right) for right, content in zip(end, P.fileParts)]
     return p, bounds
 
+def WritePDF(outfile, comments):
+
+    offset = 0
+    comment_fmt = functools.partial("%{:s}{newline:s}".format, newline=os.linesep)
+    with open(outfile, 'wb') as out:
+
+        # Start out by writing any comments that we were given
+        for comment in comments:
+            data = comment_fmt(comment)
+            out.write(data)
+            offset += len(data)
+
+        # Our main loop that writes to our file
+        try:
+            while True:
+                item = (yield offset)
+                data = b"{:s}{newline:s}".format(item.toFile().rstrip(), newline=os.linesep)
+                out.write(data)
+                offset += len(data)
+
+        except GeneratorExit: pass
+    return
+
 FormatStream = "{:d} {:d} obj".format
 
 def PDFEncode(element):
@@ -864,16 +887,14 @@ def do_writepdf(outfile, parameters):
     object_pairs = pairup_files(object_files)
     xref_pairs = pairup_xrefs(xref_files)
 
+    # setup our header
+    HEADER = []
+    HEADER.append("PDF-{:.1f}".format(parameters.set_version))
+    HEADER.append(parameters.set_binary if parameters.set_binary else '')
+
     # create our pdf instance
-    HEADER = '%PDF-X.x\n'
-
-    P = PDFCore.PDFFile()
-    P.setHeaderOffset(0)
-    P.version = "{:.1f}".format(parameters.set_version)
-
-    # peepdf is stupid as the author is hardcoding the bytes here...
-    P.binary = True
-    offset = 0x11
+    P = WritePDF(outfile, HEADER)
+    offset = next(P)
 
     # Load our pdf body and update it if necessary
     objects = load_body(object_pairs)
@@ -906,40 +927,23 @@ def do_writepdf(outfile, parameters):
             raise AssertionError((body.getNextOffset(), table[index].objectOffset))
         body.setObject(id=index + len(xrefs_body), object=obj)
 
-    # ...and then update all the objects/streams we added as per peepdf's method
-    P.addBody(body)
-    P.addNumObjects(body.getNumObjects())
-    P.addNumStreams(body.getNumStreams())
-    P.addNumEncodedStreams(body.getNumEncodedStreams())
-    P.addNumDecodingErrors(body.getNumDecodingErrors())
+    # Iterate through each object in our body, and send it to our writer
+    [ P.send(body.objects[index]) for index in sorted(body.objects) ]
 
     # Now we can start adding our xref stuff
     subsection = PDFCore.PDFCrossRefSubSection(0, len(xrefs_body), xrefs_body)
     section = PDFCore.PDFCrossRefSection()
     section.addSubsection(subsection)
-    P.addCrossRefTableSection([section, None])
+    P.send(section)
 
     # Lastly...the trailer, which should point to our table.
-    for item in xrefs_body:
-        if item.objectOffset is not None:
-            print hex(item.objectOffset)
     infile, = trailer_files
     trailer = load_trailer(infile)
     trailer.setLastCrossRefSection(xrefs_user[0].objectOffset)
+    P.send(trailer)
 
-    # We can't trust peepdf, so don't let it do any of these
-    P.addTrailer([None, None])
-    #P.crossRefTable = [[None, None]]
-
-    # Save the PDF using peepdf
-    P.updateStats()
-    fucking, stupid = P.save(outfile)
-    if fucking:
-        raise ValueError(stupid)
-
-    # Append trailer manually because the author of peepdf is fucking crazy
-    with open(outfile, 'ab') as out:
-        out.write(trailer.toFile())
+    # That's it.
+    P.close()
     return 0
 
 def halp():
@@ -961,6 +965,7 @@ def halp():
     Pcombine = Paction.add_parser('write', help='write the files in a directory into a pdf file')
     if Pcombine:
         Pcombine.add_argument('files', nargs='*', help='specify the directory containing the objects to write')
+        Pcombine.add_argument('-B', '--set-binary-chars', dest='set_binary', action='store', type=operator.methodcaller('decode','hex'), default='', help='set the binary comment at the top of the pdf')
         Pcombine.add_argument('-V', '--set-version', dest='set_version', action='store', type=float, default=1.7, help='set the pdf version to use')
         Pcombine.add_argument('-U', '--update-metadata', dest='update_metadata', action='store_true', default=False, help='update the metadata for each object (Filter and Length) by looking at the object\'s contents')
         Pcombine.add_argument('-I', '--ignore-xrefs', dest='update_xrefs', action='store_false', default=True, help='ignore rebuilding of the xrefs (use one of the provided objects)')
