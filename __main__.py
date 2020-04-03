@@ -37,7 +37,7 @@ def WritePDF(outfile, comments):
 
 FormatStream = "{:d} {:d} obj".format
 
-def PDFEncode(element):
+def DecodeFromPDF(element):
     if isinstance(element, PDFCore.PDFNum):
         res = element.getValue()
         return float(res) if '.' in res else int(res)
@@ -55,25 +55,25 @@ def PDFEncode(element):
         return str(res)
     elif isinstance(element, PDFCore.PDFArray):
         iterable = element.getElements()
-        return [ PDFEncode(item) for item in iterable ]
+        return [ DecodeFromPDF(item) for item in iterable ]
     elif isinstance(element, PDFCore.PDFDictionary):
         iterable = element.getElements()
-        return { str(name) : PDFEncode(item) for name, item in iterable.items() }
+        return { str(name) : DecodeFromPDF(item) for name, item in iterable.items() }
     elif isinstance(element, PDFCore.PDFBool):
         return bool(element)
     raise TypeError(element)
 
-def PDFDecode(instance):
+def EncodeToPDF(instance):
     if isinstance(instance, PDFCore.PDFObject):
         return instance
     elif isinstance(instance, dict):
         # ensure the names in the dictionary are proper strings...
         decoded = { name if isinstance(name, unicode) else PDFCodec.decode(name, 'ignore')[0] : item for name, item in instance.items() }
-        res = { PDFCodec.encode(name, 'ignore')[0] : PDFDecode(item) for name, item in decoded.items() }
+        res = { PDFCodec.encode(name, 'ignore')[0] : EncodeToPDF(item) for name, item in decoded.items() }
         return PDFCore.PDFDictionary(elements=res)
 
     elif isinstance(instance, list):
-        res = [ PDFDecode(item) for item in instance ]
+        res = [ EncodeToPDF(item) for item in instance ]
         return PDFCore.PDFArray(elements=res)
 
     elif isinstance(instance, float):
@@ -131,7 +131,6 @@ def do_listpdf(infile, parameters):
     print("SHA1: {:s}".format(stats['SHA1']))
     print("SHA256: {:s}".format(stats['SHA256']))
     print('')
-
 
     for i, position in enumerate(P.getOffsets()):
         if operator.contains(position, 'header'):
@@ -370,7 +369,7 @@ def dump_objects(pdf, revision, path, compressed=False):
 
         # Each object should have a dictionary or a list, so encode it
         # into json, so we can dump it to a file
-        elements = PDFEncode(object)
+        elements = DecodeFromPDF(object)
 
         elements_name = '.'.join([Fobjectname(index), 'json'])
         Fdump(elements, open(os.path.join(path, elements_name), 'wt'))
@@ -381,7 +380,7 @@ def dump_trailer(pdf, revision, path):
 
     # Grab our trailer dictionary, and encode it.
     _, meta, _ = find_trailermeta(pdf.trailer[revision])
-    elements = PDFEncode(meta)
+    elements = DecodeFromPDF(meta)
 
     # Now just to write this thing somewhere...
     elements_name = '.'.join(['trailer', 'json'])
@@ -401,7 +400,7 @@ def dump_xrefs(pdf, revision, table, path):
         # If it's a stream, then write it uncompressed to our file
         if isinstance(xref, PDFCore.PDFStream):
             dump_stream(xref, name_fmt, compressed=False)
-            elements = PDFEncode(xref)
+            elements = DecodeFromPDF(xref)
             elements_name = name_fmt(ext='json')
             Fdump(elements, open(elements_name, 'wt'))
             continue
@@ -450,12 +449,12 @@ def do_readpdf(infile, parameters):
         path = parameters.directory[version]
         if not os.path.isdir(path):
             print("Skipping revision {:d} due to output path not being a directory: {:s}".format(version, path))
-            continue
 
-        dump_objects(P, version, path, compressed=parameters.compressed)
-        dump_trailer(P, version, path)
-        dump_xrefs(P, version, table, path)
-
+        else:
+            dump_objects(P, version, path, compressed=parameters.compressed)
+            dump_trailer(P, version, path)
+            dump_xrefs(P, version, table, path)
+        continue
     return 0
 
 def object_size(object, index, generation=0):
@@ -643,7 +642,7 @@ def load_body(pairs):
 
         if contentfile:
             try:
-                filter_and_stream = load_stream(contentfile, PDFDecode(meta))
+                filter_and_stream = load_stream(contentfile, EncodeToPDF(meta))
 
             except NotImplementedError as E:
                 print("Unable to load content (\"{:s}\") for object {:d}".format(contentfile, index))
@@ -651,7 +650,7 @@ def load_body(pairs):
             body[index] = filter_and_stream
 
         else:
-            body[index] = None, PDFDecode(meta)
+            body[index] = None, EncodeToPDF(meta)
         continue
     return body
 
@@ -667,11 +666,11 @@ def load_xrefs(pairs):
         # Load any metadata that was specified
         else:
             metadict = json.load(open(metafile, 'rt'))
-            meta = None if metadict is None else PDFDecode(metadict)
+            meta = None if metadict is None else EncodeToPDF(metadict)
 
         # Read our file and remember its filter type...Never forget.
         try:
-            filter_and_stream = load_stream(xfilename, None if meta is None else PDFDecode(meta))
+            filter_and_stream = load_stream(xfilename, None if meta is None else EncodeToPDF(meta))
 
         except NotImplementedError as E:
             print("Unable to load content (\"{:s}\") for xref {:d}".format(contentfile, index))
@@ -681,7 +680,7 @@ def load_xrefs(pairs):
 
 def load_trailer(infile):
     metadict = json.load(open(infile, 'rt'))
-    meta = PDFDecode(metadict)
+    meta = EncodeToPDF(metadict)
     return PDFCore.PDFTrailer(meta)
 
 def update_body(objects):
@@ -700,7 +699,7 @@ def update_body(objects):
         meta = obj.getElements()
 
         # And that our metadata is a dict that we can update
-        res = PDFDecode(meta)
+        res = EncodeToPDF(meta)
         if not isinstance(res, PDFCore.PDFDictionary):
             t = res.__class__
             print("Skipping {:s} while updating body due to invalid metadata type ({!s})".format(Fobject(obj, index), t.__name__))
@@ -770,7 +769,7 @@ def update_xrefs(objects, offset):
         meta = obj.getElements()
 
         # And that our metadata is a dict that we can update
-        res = PDFDecode(meta)
+        res = EncodeToPDF(meta)
         if not isinstance(res, PDFCore.PDFDictionary):
             t = res.__class__
             print("Skipping {:s} while updating xrefs due to invalid metadata type ({!s})".format(Fxref(obj, index), t.__name__))
