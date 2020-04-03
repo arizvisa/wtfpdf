@@ -1,6 +1,6 @@
 import functools, itertools, types, builtins, operator, six
 import argparse, json, math, os, os.path, codecs, heapq
-import PDFCore
+from peepdf import *
 
 PDFCodec = codecs.lookup('iso8859-1')
 infile = '/home/user/audit/nitro/nitro_for_ali/nitro_60e_non_minimized/poc.pdf'
