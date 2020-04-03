@@ -791,8 +791,8 @@ def update_xrefs(objects, offset):
             [ meta.pop(PDFCodec.encode(name)[0]) for name in remove ]
 
         # Re-assign our metadata the stream directly because peepdf sucks
-        obj.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue()
-        obj.elements = meta
+        obj.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue() if meta else b''
+        obj.elements = meta or {}
 
     # Go back through the objects and repair the offsets
     indices = sorted(objects)
