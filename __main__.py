@@ -26,7 +26,7 @@ def PDFEncode(element):
         return str(res)
     elif isinstance(element, PDFCore.PDFHexString):
         res = element.getValue()
-        return res.encode('hex')
+        return "<{:s}>".format(res.encode('hex'))
     elif isinstance(element, PDFCore.PDFReference):
         res = element.getValue()
         return str(res)
@@ -84,8 +84,8 @@ def PDFDecode(instance):
 
         # check if it's a hexstring
         try:
-            if len(res) % 2 == 0 and res.lower() == res and res.translate(None, b' \t\n') == res:
-                res.decode('hex')
+            left, middle, right = res[:1], res[1:-1], res[-1:]
+            if (left, right) == ('<', '>') and len(middle) % 2 == 0 and middle.lower() == middle and middle.translate(None, b' \t\n') == middle:
                 return PDFCore.PDFHexString(res)
 
         except TypeError:
@@ -650,20 +650,19 @@ def update_body(objects):
         if not isinstance(obj, PDFCore.PDFObjectStream):
             print("Skipping {:s}..".format(Fobject(obj, index)))
             continue
-
         meta = obj.getElements()
-        size = len(obj.getRawStream())
 
         # And that our metadata is a dict that we can update
-        meta_obj = PDFDecode(meta)
-        if not isinstance(meta_obj, PDFCore.PDFDictionary):
-            t = meta_obj.__class__
+        res = PDFDecode(meta)
+        if not isinstance(res, PDFCore.PDFDictionary):
+            t = res.__class__
             print("Skipping {:s} with invalid metadata type ({!s})".format(Fobject(obj, index), t.__name__))
             continue
 
         meta_update = {}
 
         # First check if we need update the /Length for the stream
+        size = len(obj.getRawStream())
         if not operator.contains(meta, u'/Length'):
             print("{:s} does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length')))
 
@@ -681,7 +680,7 @@ def update_body(objects):
         elif not operator.contains(meta, u'/Filter'):
             print("{:s} does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter')))
 
-        elif not isinstance(meta[u'/Filter'], PDFCore.PDFName):
+        elif not isinstance(meta[u'/Filter'], (PDFCore.PDFName, PDFCore.PDFArray)):
             t = PDFCore.PDFName
             print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta['/Filter']), t.__name__))
 
@@ -692,19 +691,95 @@ def update_body(objects):
             meta_update[u'/Filter'] = flt
 
         # Check if anything needs to be updated and then do it
-        if any(operator.contains(meta_update, name) for name in [u'/Filter', u'/Length']):
-            print("Updating the fields for {:s} object {:d}: {!s}".format(obj.getType(), index, ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())))
+        if meta_update:
+            print("Updating the fields for {:s}: {!s}".format(Fobject(obj, index), ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())))
 
             remove = { name for name, item in meta_update.items() if item is None }
-            update = { name : meta_update[name] for name in meta_update if name not in remove }
+            update = { PDFCodec.encode(name)[0] : meta_update[name] for name in meta_update if name not in remove }
             meta.update(update)
-            [ meta.pop(name) for name in remove ]
+            [ meta.pop(PDFCodec.encode(name)[0]) for name in remove ]
 
         # Re-assign our metadata the stream directly because peepdf sucks
         obj.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue()
         obj.elements = meta
 
     # That's it, we've updated the metadata for each object
+    return objects
+
+def update_xrefs(objects, offset):
+
+    # Update the xrefs in-place
+    for index in sorted(objects):
+        flt, obj = objects[index]
+
+        Fxref = lambda object, index: u"{:s} xref {:d}".format(object.getType(), index)
+        Ffieldvalue = lambda field: u"{:s}({!r})".format(field.__class__.__name__, field.getValue())
+        Ffieldname = lambda name: u"`/{:s}`".format(name)
+
+        # Ensure that we're an object stream
+        if not isinstance(obj, PDFCore.PDFObjectStream):
+            print("Skipping {:s}..".format(Fxref(obj, index)))
+            continue
+        meta = obj.getElements()
+
+        # And that our metadata is a dict that we can update
+        res = PDFDecode(meta)
+        if not isinstance(res, PDFCore.PDFDictionary):
+            t = res.__class__
+            print("Skipping {:s} with invalid metadata type ({!s})".format(Fxref(obj, index), t.__name__))
+            continue
+
+        meta_update = {}
+
+        # First check and update the length so it corresponds to the stream
+        size = len(obj.getRawStream())
+        if not operator.contains(meta, u'/Length'):
+            print("{:s} does not have a {:s} field...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Length')))
+
+        elif not isinstance(meta[u'/Length'], PDFCore.PDFNum):
+            t = PDFCore.PDFNum
+            print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta['/Length']), t.__name__))
+
+        elif int(meta[u'/Length'].getValue()) != size:
+            meta_update[u'/Length'] = PDFCore.PDFNum(u"{:d}".format(size))
+
+        # Now check to see if the /Filter needs to be fixed
+        if flt is None and not operator.contains(meta, u'/Filter'):
+            pass
+
+        elif not operator.contains(meta, u'/Filter'):
+            print("{:s} does not have a {:s} field...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Filter')))
+
+        elif not isinstance(meta[u'/Filter'], (PDFCore.PDFName, PDFCore.PDFArray)):
+            t = PDFCore.PDFName
+            print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta['/Filter']), t.__name__))
+
+        elif flt is None:
+            meta_update[u'/Filter'] = None
+
+        elif meta[u'/Filter'].getValue() != flt.getValue():
+            meta_update[u'/Filter'] = flt
+
+        # Check if anything needs to be updated and then do it
+        if meta_update:
+            print("Updating the fields for {:s}: {!s}".format(Fxref(obj, index), ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())))
+
+            remove = { name for name, item in meta_update.items() if item is None }
+            update = { PDFCodec.encode(name)[0] : meta_update[name] for name in meta_update if name not in remove }
+            meta.update(update)
+            [ meta.pop(PDFCodec.encode(name)[0]) for name in remove ]
+
+        # Re-assign our metadata the stream directly because peepdf sucks
+        obj.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue()
+        obj.elements = meta
+
+    # Go back through the objects and repair the offsets
+    for index in sorted(objects):
+        _, obj = objects[index]
+
+        if not isinstance(obj, PDFCore.PDFObjectStream):
+            continue
+        meta = obj.getElements()
     return objects
 
 def find_xrefs(objects):
@@ -788,6 +863,8 @@ def do_writepdf(outfile, parameters):
 
     # Load the xrefs that were provided by the user
     xrefs = load_xrefs(xref_pairs)
+    if parameters.update_xrefs:
+        xrefs = update_xrefs(xrefs, offset=body.getNextOffset())
     xrefs_user = calculate_xrefs(xrefs, len(xrefs_body), offset=body.getNextOffset())
 
     if parameters.update_xrefs:
