@@ -485,7 +485,7 @@ def object_size(object, index, generation=0):
 
     # we need to calculate this ourselves because peepdf doesn't expose this
     # to us in any form. the author instead hardcodes this calculation
-    fmt = functools.partial('{:d} {:d} obj{newline:s}{:s}{newline:s}endobj{newline:s}'.format, newline=os.linesep)
+    fmt = functools.partial('{:d} {:d} obj{newline:s}{!s}{newline:s}endobj{newline:s}'.format, newline=os.linesep)
     return len(fmt(index, generation, object.getRawValue()))
 
 def collect_files(paths):
