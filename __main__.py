@@ -895,6 +895,9 @@ def find_xrefs(objects):
     return result
 
 def calculate_xrefs(objects, base=0, offset=0):
+    if not sorted:
+        return []
+
     bounds = 0, max(sorted(objects))
 
     # first build a slot table so we can figure out which objects
