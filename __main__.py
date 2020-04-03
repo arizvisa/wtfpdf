@@ -656,7 +656,7 @@ def update_body(objects):
 
         # Ensure that we're an object stream
         if not isinstance(obj, PDFCore.PDFObjectStream):
-            print("Skipping {:s}..".format(Fobject(obj, index)))
+            print("Skipping {:s} while updating body...".format(Fobject(obj, index)))
             continue
         meta = obj.getElements()
 
@@ -664,7 +664,7 @@ def update_body(objects):
         res = PDFDecode(meta)
         if not isinstance(res, PDFCore.PDFDictionary):
             t = res.__class__
-            print("Skipping {:s} with invalid metadata type ({!s})".format(Fobject(obj, index), t.__name__))
+            print("Skipping {:s} while updating body due to invalid metadata type ({!s})".format(Fobject(obj, index), t.__name__))
             continue
 
         meta_update = {}
@@ -726,7 +726,7 @@ def update_xrefs(objects, offset):
 
         # Ensure that we're an object stream
         if not isinstance(obj, PDFCore.PDFObjectStream):
-            print("Skipping {:s}..".format(Fxref(obj, index)))
+            print("Skipping {:s} while updating xrefs...".format(Fxref(obj, index)))
             continue
         meta = obj.getElements()
 
@@ -734,7 +734,7 @@ def update_xrefs(objects, offset):
         res = PDFDecode(meta)
         if not isinstance(res, PDFCore.PDFDictionary):
             t = res.__class__
-            print("Skipping {:s} with invalid metadata type ({!s})".format(Fxref(obj, index), t.__name__))
+            print("Skipping {:s} while updating xrefs due to invalid metadata type ({!s})".format(Fxref(obj, index), t.__name__))
             continue
 
         meta_update = {}
