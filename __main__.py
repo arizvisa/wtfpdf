@@ -313,32 +313,38 @@ def collect_objects(pdf, revision, path, parameters):
     return objects
 
 def dump_stream(object, path_fmt, compressed=False):
-    stats = object.getStats()
+    meta = object.getElements()
 
     # Figure out whether there were any parsing errors, because
     # if there was..then we just dump the stream as-is.
-    if object.filter in {None} or compressed or stats.get('Decoding Errors', False):
-        Fgetstream = operator.methodcaller('getRawStream')
+    if object.filter in {None} or compressed or len(object.errors):
         suffix = 'Binary'
+
+        # Fix up the actual stream length by removing the trailing newlines
+        # because peepdf doesn't know how to fucking parse object streams
+        # properly
+        length = int(meta[b'/Length'].getValue())
+        data = object.getRawStream()[:length]
 
     # Otherwise, we can decode to stream and write it to our path
     elif isinstance(object.filter, PDFCore.PDFName):
-        Fgetstream = operator.methodcaller('getStream')
         filter = object.filter.getValue()
         suffix = filter.translate(None, '/')
 
+        data = object.getStream()
+
     elif isinstance(object.filter, PDFCore.PDFArray):
-        Fgetstream = operator.methodcaller('getStream')
         filters = [ item.getValue() for item in object.filter.getElements() ]
         suffix = ','.join(item.translate(None, '/') for item in filters) + ('' if len(filters) > 1 else ',')
+
+        data = object.getStream()
 
     else:
         raise TypeError(object.filter)
 
-    stream = Fgetstream(object)
     with open(path_fmt(ext=suffix), 'wb') as out:
-        out.write(stream)
-    return len(stream)
+        out.write(data)
+    return len(data)
 
 def dump_objects(pdf, revision, path, compressed=False):
     stats = pdf.getStats()
@@ -347,15 +353,14 @@ def dump_objects(pdf, revision, path, compressed=False):
     _, items = stats['Versions'][revision]['Objects']
     for index in items:
         object = pdf.getObject(index, version=revision)
-        stats = object.getStats()
 
         Fobjectname = "{:d}_0_obj".format
         Fdump = functools.partial(json.dump, encoding=PDFCodec.name, indent=4, sort_keys=True)
         Ftypename = lambda element: element.__class__.__name__
 
         # If there were any errors, then notify the user.
-        if stats['Errors'] and int(stats['Errors']) > 0:
-            print("Errors in revision {:d} ({:s}) with {:s}: {:d}".format(revision, path, Fobjectname(index), int(stats['Errors'])))
+        if len(object.errors):
+            print("Errors in revision {:d} ({:s}) with {:s}: {:d}".format(revision, path, Fobjectname(index), len(object.errors)))
 
         # Otherwise, aggregate the object index into our success list
         else:
@@ -605,15 +610,13 @@ def load_stream(infile, meta=None):
     # The author of peepdf seems to smoke crack, so we'll explicitly
     # modify the fields to get his shit to work...
     else:
-        if not meta.getElements():
-            raise ValueError
         stream = PDFCore.PDFObjectStream(rawDict=meta.getRawValue())
         stream.elements = meta.getElements()
-    stream.decodedStream = data
 
     # If the suffix is ".Binary", then this is just a raw file with
     # no filter attached.
     if filter.lower() == u'binary':
+        stream.rawStream = data
         return None, stream
 
     # If there's a ',' in the suffix, then this is an array. Split
@@ -630,6 +633,7 @@ def load_stream(infile, meta=None):
     # Our stream is encoded, so set the correct fields explicitly, and
     # ask peepdf to encode it for us.
     stream.isEncodedStream = True
+    stream.decodedStream = data
     wtf, you = stream.encode()
     if wtf:
         raise NotImplementedError(you)
@@ -683,20 +687,21 @@ def load_trailer(infile):
     meta = EncodeToPDF(metadict)
     return PDFCore.PDFTrailer(meta)
 
-def update_body(objects):
+def update_body(objects, remove_metadata=False):
 
     # Update the objects dict in-place
     for index in sorted(objects):
         flt, obj = objects[index]
+        stats = obj.getStats()
+
         Fobject = lambda object, index: u"{:s} object {:d}".format(object.getType(), index)
         Ffieldvalue = lambda field: u"{:s}({!r})".format(field.__class__.__name__, field.getValue())
         Ffieldname = lambda name: u"`/{:s}`".format(name)
 
         # Ensure that we're an object stream
         if not isinstance(obj, PDFCore.PDFObjectStream):
-            print("Skipping {:s} while updating body...".format(Fobject(obj, index)))
             continue
-        meta = obj.getElements()
+        meta, is_empty = obj.getElements(), not (obj.rawValue and True or False)
 
         # And that our metadata is a dict that we can update
         res = EncodeToPDF(meta)
@@ -708,9 +713,15 @@ def update_body(objects):
         meta_update = {}
 
         # First check if we need update the /Length for the stream
-        size = len(obj.getRawStream())
-        if not operator.contains(meta, u'/Length'):
-            print("{:s} does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length')))
+        size = len(obj.rawStream)
+        if obj.isEncodedStream:
+            length = int(meta[u'/Length'].getValue())
+
+        if is_empty and not operator.contains(meta, u'/Length'):
+            print("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length')))
+
+        elif not operator.contains(meta, u'/Length'):
+            meta_update[u'/Length'] = PDFCore.PDFNum(u"{:d}".format(size))
 
         elif not isinstance(meta[u'/Length'], PDFCore.PDFNum):
             t = PDFCore.PDFNum
@@ -723,22 +734,27 @@ def update_body(objects):
         if flt is None and not operator.contains(meta, '/Filter'):
             pass
 
-        elif not operator.contains(meta, u'/Filter'):
-            print("{:s} does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter')))
+        elif is_empty and not operator.contains(meta, u'/Filter'):
+            print("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter')))
+
+        elif flt and not operator.contains(meta, u'/Filter'):
+            meta_update[u'/Filter'] = flt
 
         elif not isinstance(meta[u'/Filter'], (PDFCore.PDFName, PDFCore.PDFArray)):
             t = PDFCore.PDFName
             print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta['/Filter']), t.__name__))
 
-        elif flt is None:
+        elif flt is None and remove_metadata:
             meta_update[u'/Filter'] = None
 
-        elif meta[u'/Filter'].getValue() != flt.getValue():
+        elif flt and meta[u'/Filter'].getValue() != flt.getValue():
             meta_update[u'/Filter'] = flt
 
         # Check if anything needs to be updated and then do it
         if meta_update:
-            print("Updating the fields for {:s}: {!s}".format(Fobject(obj, index), ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())))
+            old = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if operator.contains(meta, name) and meta[name] is None else Ffieldvalue(meta[name]) if operator.contains(meta, name) else '<Missing>']) for name in meta_update)
+            new = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())
+            print("Updating the fields for {:s} from {!s}: {!s}".format(Fobject(obj, index), old, new))
 
             remove = { name for name, item in meta_update.items() if item is None }
             update = { PDFCodec.encode(name)[0] : meta_update[name] for name in meta_update if name not in remove }
@@ -752,11 +768,12 @@ def update_body(objects):
     # That's it, we've updated the metadata for each object
     return objects
 
-def update_xrefs(objects, offset):
+def update_xrefs(objects, offset, remove_metadata=False):
 
     # Update the xrefs in-place
     for index in sorted(objects):
         flt, obj = objects[index]
+        stats = obj.getStats()
 
         Fxref = lambda object, index: u"{:s} xref {:d}".format(object.getType(), index)
         Ffieldvalue = lambda field: u"{:s}({!r})".format(field.__class__.__name__, field.getValue())
@@ -766,7 +783,7 @@ def update_xrefs(objects, offset):
         if not isinstance(obj, PDFCore.PDFObjectStream):
             print("Skipping {:s} while updating xrefs...".format(Fxref(obj, index)))
             continue
-        meta = obj.getElements()
+        meta, is_empty = obj.getElements(), not (obj.rawValue and True or False)
 
         # And that our metadata is a dict that we can update
         res = EncodeToPDF(meta)
@@ -779,8 +796,11 @@ def update_xrefs(objects, offset):
 
         # First check and update the length so it corresponds to the stream
         size = len(obj.getRawStream())
-        if not operator.contains(meta, u'/Length'):
-            print("{:s} does not have a {:s} field...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Length')))
+        if is_empty and not operator.contains(meta, u'/Length'):
+            print("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Length')))
+
+        elif not operator.contains(meta, u'/Length'):
+            meta_update[u'/Length'] = PDFCore.PDFNum(u"{:d}".format(size))
 
         elif not isinstance(meta[u'/Length'], PDFCore.PDFNum):
             t = PDFCore.PDFNum
@@ -796,19 +816,24 @@ def update_xrefs(objects, offset):
         elif not operator.contains(meta, u'/Filter'):
             print("{:s} does not have a {:s} field...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Filter')))
 
+        elif flt and not operator.contains(meta, u'/Filter'):
+            meta_update[u'/Filter'] = flt
+
         elif not isinstance(meta[u'/Filter'], (PDFCore.PDFName, PDFCore.PDFArray)):
             t = PDFCore.PDFName
             print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta['/Filter']), t.__name__))
 
-        elif flt is None:
+        elif flt is None and remove_metadata:
             meta_update[u'/Filter'] = None
 
-        elif meta[u'/Filter'].getValue() != flt.getValue():
+        elif flt and meta[u'/Filter'].getValue() != flt.getValue():
             meta_update[u'/Filter'] = flt
 
         # Check if anything needs to be updated and then do it
         if meta_update:
-            print("Updating the fields for {:s}: {!s}".format(Fxref(obj, index), ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())))
+            old = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if operator.contains(meta, name) and meta[name] is None else Ffieldvalue(meta[name]) if operator.contains(meta, name) else '<Missing>']) for name in meta_update)
+            new = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())
+            print("Updating the fields for {:s} from {!s}: {!s}".format(Fxref(obj, index), old, new))
 
             remove = { name for name, item in meta_update.items() if item is None }
             update = { PDFCodec.encode(name)[0] : meta_update[name] for name in meta_update if name not in remove }
@@ -897,8 +922,8 @@ def do_writepdf(outfile, parameters):
 
     # Load our pdf body and update it if necessary
     objects = load_body(object_pairs)
-    if parameters.update_metadata:
-        objects = update_body(objects)
+    if parameters.update_metadata or parameters.remove_metadata:
+        objects = update_body(objects, remove_metadata=parameters.remove_metadata)
     xrefs_body = calculate_xrefs(objects, 0, offset)
 
     # Now to build this thing...
@@ -912,8 +937,8 @@ def do_writepdf(outfile, parameters):
 
     # Load the xrefs that were provided by the user
     xrefs = load_xrefs(xref_pairs)
-    if parameters.update_xrefs:
-        xrefs = update_xrefs(xrefs, offset=body.getNextOffset())
+    if parameters.update_xrefs or parameters.remove_metadata:
+        xrefs = update_xrefs(xrefs, offset=body.getNextOffset(), remove_metadata=parameters.remove_metadata)
     xrefs_user = calculate_xrefs(xrefs, len(xrefs_body), offset=body.getNextOffset())
 
     if parameters.update_xrefs:
@@ -967,6 +992,7 @@ def halp():
         Pcombine.add_argument('-B', '--set-binary-chars', dest='set_binary', action='store', type=operator.methodcaller('decode','hex'), default='', help='set the binary comment at the top of the pdf')
         Pcombine.add_argument('-V', '--set-version', dest='set_version', action='store', type=float, default=1.7, help='set the pdf version to use')
         Pcombine.add_argument('-U', '--update-metadata', dest='update_metadata', action='store_true', default=False, help='update the metadata for each object (Filter and Length) by looking at the object\'s contents')
+        Pcombine.add_argument('-R', '--remove-metadata', dest='remove_metadata', action='store_true', default=False, help='remove the Filter field from the metadata for each object that doesn\'t have an encoding (*.Binary)')
         Pcombine.add_argument('-I', '--ignore-xrefs', dest='update_xrefs', action='store_false', default=True, help='ignore rebuilding of the xrefs (use one of the provided objects)')
 
     Phelp = Paction.add_parser('help', help='yep')
