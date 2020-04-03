@@ -1,5 +1,5 @@
 import functools, itertools, types, builtins, operator, six
-import argparse, json, math, os.path, codecs, heapq
+import argparse, json, math, os, os.path, codecs, heapq
 import PDFCore
 
 PDFCodec = codecs.lookup('iso8859-1')
@@ -436,10 +436,13 @@ def do_readpdf(infile, parameters):
     return 0
 
 def object_size(object, index, generation=0):
+    if generation:
+        raise ValueError("peepdf does not support objects w/ a non-zero generation")
+
     # we need to calculate this ourselves because peepdf doesn't expose this
     # to us in any form. the author instead hardcodes this calculation
-    fmt = '{:d} {:d} obj\n{:s}\nendobj\n'.format
-    return len(fmt(index, generation, object.toFile()))
+    fmt = functools.partial('{:d} {:d} obj{newline:s}{:s}{newline:s}endobj{newline:s}'.format, newline=os.linesep)
+    return len(fmt(index, generation, object.getRawValue()))
 
 def collect_files(paths):
     result, xrefs, trailers = {}, {}, []
@@ -867,9 +870,9 @@ def do_writepdf(outfile, parameters):
     P = PDFCore.PDFFile()
     P.setHeaderOffset(0)
     P.version = "{:.1f}".format(parameters.set_version)
-    if parameters.set_binary:
-        P.binary = True
-        P.binaryChars = parameters.set_binary
+
+    # peepdf is stupid as the author is hardcoding the bytes here...
+    P.binary = True
     offset = 0x11
 
     # Load our pdf body and update it if necessary
@@ -894,8 +897,7 @@ def do_writepdf(outfile, parameters):
     xrefs_user = calculate_xrefs(xrefs, len(xrefs_body), offset=body.getNextOffset())
 
     if parameters.update_xrefs:
-        PDFCore.PDFCrossRefEntry(0, 0xffff, 'f')
-        raise NotImplementedError
+        xrefs_user.append(PDFCore.PDFCrossRefEntry(0, 0xffff, 'f'))
 
     # Add them to the body
     for index in sorted(xrefs):
@@ -907,21 +909,27 @@ def do_writepdf(outfile, parameters):
     # ...and then update all the objects/streams we added as per peepdf's method
     P.addBody(body)
     P.addNumObjects(body.getNumObjects())
-    P.addNumObjects(body.getNumStreams())
+    P.addNumStreams(body.getNumStreams())
     P.addNumEncodedStreams(body.getNumEncodedStreams())
     P.addNumDecodingErrors(body.getNumDecodingErrors())
 
     # Now we can start adding our xref stuff
-    P.addCrossRefTableSection([None, None])
+    subsection = PDFCore.PDFCrossRefSubSection(0, len(xrefs_body), xrefs_body)
+    section = PDFCore.PDFCrossRefSection()
+    section.addSubsection(subsection)
+    P.addCrossRefTableSection([section, None])
 
     # Lastly...the trailer, which should point to our table.
+    for item in xrefs_body:
+        if item.objectOffset is not None:
+            print hex(item.objectOffset)
     infile, = trailer_files
     trailer = load_trailer(infile)
-    trailer.setLastCrossRefSection(0)
+    trailer.setLastCrossRefSection(xrefs_user[0].objectOffset)
 
     # We can't trust peepdf, so don't let it do any of these
-    P.trailer = [[None, None]]
-    P.crossRefTable = [[None, None]]
+    P.addTrailer([None, None])
+    #P.crossRefTable = [[None, None]]
 
     # Save the PDF using peepdf
     P.updateStats()
@@ -953,7 +961,6 @@ def halp():
     Pcombine = Paction.add_parser('write', help='write the files in a directory into a pdf file')
     if Pcombine:
         Pcombine.add_argument('files', nargs='*', help='specify the directory containing the objects to write')
-        Pcombine.add_argument('-B', '--set-binary-chars', dest='set_binary', action='store', type=operator.methodcaller('decode','hex'), default='', help='set the binary comment at the top of the pdf')
         Pcombine.add_argument('-V', '--set-version', dest='set_version', action='store', type=float, default=1.7, help='set the pdf version to use')
         Pcombine.add_argument('-U', '--update-metadata', dest='update_metadata', action='store_true', default=False, help='update the metadata for each object (Filter and Length) by looking at the object\'s contents')
         Pcombine.add_argument('-I', '--ignore-xrefs', dest='update_xrefs', action='store_false', default=True, help='ignore rebuilding of the xrefs (use one of the provided objects)')
