@@ -298,7 +298,10 @@ def get_xrefs(trailer, table):
             break
 
         # Use the offset to find the next table
-        offset = int(elements[b'/Prev'].getValue())
+        previous = elements[b'/Prev']
+        if not isinstance(previous, PDFCore.PDFNum):
+            raise TypeError(previous)
+        offset = int(previous.getValue())
     return
 
 def collect_objects(pdf, revision, path, parameters):
@@ -312,7 +315,7 @@ def collect_objects(pdf, revision, path, parameters):
 
     return objects
 
-def dump_stream(object, path_fmt, compressed=False):
+def dump_stream(objects, object, path_fmt, compressed=False):
     meta = object.getElements()
 
     # Figure out whether there were any parsing errors, because
@@ -320,11 +323,24 @@ def dump_stream(object, path_fmt, compressed=False):
     if object.filter in {None} or compressed or len(object.errors):
         suffix = 'Binary'
 
+        # First grab the length out of the stream's dictionary
+        length = meta[b'/Length']
+        if isinstance(length, PDFCore.PDFNum):
+            size = int(length.getValue())
+
+        # Sometimes it can be a reference...grrr
+        elif isinstance(length, PDFCore.PDFReference):
+            indirect = objects[length.getId()]
+            direct = indirect.object
+            size = int(direct.getValue())
+
+        else:
+            raise TypeError(length)
+
         # Fix up the actual stream length by removing the trailing newlines
         # because peepdf doesn't know how to fucking parse object streams
         # properly
-        length = int(meta[b'/Length'].getValue())
-        data = object.getRawStream()[:length]
+        data = object.getRawStream()[:size]
 
     # Otherwise, we can decode to stream and write it to our path
     elif isinstance(object.filter, PDFCore.PDFName):
@@ -370,7 +386,7 @@ def dump_objects(pdf, revision, path, compressed=False):
         # contents into a file.
         if isinstance(object, PDFCore.PDFStream):
             stream_fmt = functools.partial("{:s}.{ext:s}".format, os.path.join(path, Fobjectname(index)))
-            dump_stream(object, stream_fmt, compressed)
+            dump_stream(pdf.body[revision].objects, object, stream_fmt, compressed)
 
         # Each object should have a dictionary or a list, so encode it
         # into json, so we can dump it to a file
@@ -404,7 +420,8 @@ def dump_xrefs(pdf, revision, table, path):
 
         # If it's a stream, then write it uncompressed to our file
         if isinstance(xref, PDFCore.PDFStream):
-            dump_stream(xref, name_fmt, compressed=False)
+            dump_stream(pdf.body[revision].objects, xref, name_fmt, compressed=False)
+
             elements = DecodeFromPDF(xref)
             elements_name = name_fmt(ext='json')
             Fdump(elements, open(elements_name, 'wt'))
