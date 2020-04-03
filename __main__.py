@@ -86,7 +86,7 @@ def PDFDecode(instance):
         try:
             left, middle, right = res[:1], res[1:-1], res[-1:]
             if (left, right) == ('<', '>') and len(middle) % 2 == 0 and middle.lower() == middle and middle.translate(None, b' \t\n') == middle:
-                return PDFCore.PDFHexString(res)
+                return PDFCore.PDFHexString(middle)
 
         except TypeError:
             pass
