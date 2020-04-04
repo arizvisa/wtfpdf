@@ -1011,9 +1011,9 @@ def halp():
         Pcombine.add_argument('files', nargs='*', help='specify the directory containing the objects to write')
         Pcombine.add_argument('-B', '--set-binary-chars', dest='set_binary', action='store', type=operator.methodcaller('decode','hex'), default='', help='set the binary comment at the top of the pdf')
         Pcombine.add_argument('-V', '--set-version', dest='set_version', action='store', type=float, default=1.7, help='set the pdf version to use')
-        Pcombine.add_argument('-U', '--update-metadata', dest='update_metadata', action='store_true', default=False, help='update the metadata for each object (Filter and Length) by looking at the object\'s contents')
-        Pcombine.add_argument('-R', '--remove-metadata', dest='remove_metadata', action='store_true', default=False, help='remove the Filter field from the metadata for each object that doesn\'t have an encoding (*.Binary)')
-        Pcombine.add_argument('-I', '--ignore-xrefs', dest='update_xrefs', action='store_false', default=True, help='ignore rebuilding of the xrefs (use one of the provided objects)')
+        Pcombine.add_argument('-s', '--skip-update-metadata', dest='update_metadata', action='store_false', default=True, help='do not update the metadata for each object (Filter and Length) when examining the object\'s contents')
+        Pcombine.add_argument('-R', '--remove-metadata', dest='remove_metadata', action='store_true', default=False, help='remove the Filter field from the object metadata when there isn\'t an encoding (*.Binary)')
+        Pcombine.add_argument('-I', '--ignore-xrefs', dest='update_xrefs', action='store_false', default=True, help='ignore rebuilding of the xrefs (use the provided objects)')
 
     Phelp = Paction.add_parser('help', help='yep')
     return P
