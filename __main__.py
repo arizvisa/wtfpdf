@@ -941,6 +941,10 @@ def do_writepdf(outfile, parameters):
 
     # Load our pdf body and update it if necessary
     objects = load_body(object_pairs)
+
+    if not len(objects):
+        raise ValueError("No valid objects could be loaded from the files that were provided as parameters: {:s}".format(', '.join(parameters.files)))
+
     if parameters.update_metadata or parameters.remove_metadata:
         objects = update_body(objects, remove_metadata=parameters.remove_metadata)
     xrefs_body = calculate_xrefs(objects, 0, offset)
