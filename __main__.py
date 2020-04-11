@@ -894,7 +894,7 @@ def find_xrefs(objects):
     return result
 
 def calculate_xrefs(objects, base=0, offset=0):
-    if not sorted:
+    if not objects:
         return []
 
     bounds = 0, max(sorted(objects))
