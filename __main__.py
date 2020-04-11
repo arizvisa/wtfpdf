@@ -700,6 +700,7 @@ def load_xrefs(pairs):
 
 def load_trailer(infile):
     metadict = json.load(open(infile, 'rt'))
+    metadict.setdefault('/Size', 0) # PDFCore requires the /Size field to be set
     meta = EncodeToPDF(metadict)
     return PDFCore.PDFTrailer(meta)
 
