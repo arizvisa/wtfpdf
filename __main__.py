@@ -632,7 +632,7 @@ def load_stream(infile, meta=None):
     # If the suffix is ".Binary", then this is just a raw file with
     # no filter attached.
     if filter.lower() == u'binary':
-        stream.rawStream = data
+        stream.decodedStream = data
         return None, stream
 
     # If there's a ',' in the suffix, then this is an array. Split
