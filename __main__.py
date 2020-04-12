@@ -700,9 +700,21 @@ def load_xrefs(pairs):
 
 def load_trailer(infile):
     metadict = json.load(open(infile, 'rt'))
-    metadict.setdefault('/Size', 0) # PDFCore requires the /Size field to be set
     meta = EncodeToPDF(metadict)
-    return PDFCore.PDFTrailer(meta)
+    if meta.hasElement('/Size'):
+        return PDFCore.PDFTrailer(meta)
+
+    # If no size was specified, then temporarily create it so that
+    # we can construct a PDFTrailer with PeePDF
+    size = PDFCore.PDFNum("{:d}".format(0))
+    meta.setElement('/Size', size, update=False)
+
+    # Hand-off our PDFDict to PeePDF
+    res = PDFCore.PDFTrailer(meta)
+
+    # Now PeePDF won't bitch, so we can remove it and continue onwards
+    res.dict.delElement('/Size', update=False)
+    return res
 
 def update_body(objects, remove_metadata=False):
 
@@ -988,6 +1000,8 @@ def do_writepdf(outfile, parameters):
     infile, = trailer_files
     trailer = load_trailer(infile)
     trailer.setLastCrossRefSection(xrefs_user[0].objectOffset)
+    if parameters.update_xrefs:
+        trailer.dict.setElement('/Size', PDFCore.PDFNum("{:d}".format(len(xrefs_body))))
     P.send(trailer)
 
     # That's it.
