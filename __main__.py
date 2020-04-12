@@ -990,23 +990,31 @@ def do_writepdf(outfile, parameters):
     # Iterate through each object in our body, and send it to our writer
     [ P.send(body.objects[index]) for index in sorted(body.objects) ]
 
-    # Now we can start adding our xref stuff
-    subsection = PDFCore.PDFCrossRefSubSection(0, len(xrefs_body), xrefs_body)
-    section = PDFCore.PDFCrossRefSection()
-    section.addSubsection(subsection)
-    P.send(section)
+    # Now we can start adding our xref stuff based on what the user gave us
+    xrefs_offset = body.getNextOffset()
+    xrefs = xrefs_body if parameters.update_xrefs else xrefs_user
+    if parameters.update_xrefs:
+        subsection = PDFCore.PDFCrossRefSubSection(0, len(xrefs), xrefs)
+        section = PDFCore.PDFCrossRefSection()
+        section.addSubsection(subsection)
+        P.send(section)
 
     # Lastly...the trailer, which should point to our table.
     infile, = trailer_files
     trailer = load_trailer(infile)
 
-    # If there aren't any xrefs, then there's no crossref section here
-    if len(xrefs_user):
-        trailer.setLastCrossRefSection(xrefs_user[0].objectOffset)
+    # Update the last crossref section with the user-specified xrefs
+    trailer.setLastCrossRefSection(xrefs_offset if parameters.update_xrefs else xrefs[0].objectOffset)
+
+    # If there aren't any xrefs, then there's no crossref section here,
+    # so explicitly hack it into the trailer's lastCrossRefSection
+    if trailer.lastCrossRefSection is None:
+        print("No xrefs were found! Using an empty string for the last crossref section offset")
+        trailer.lastCrossRefSection = ''
 
     # If we were asked to update it, then fix the size.
     if parameters.update_xrefs:
-        trailer.dict.setElement('/Size', PDFCore.PDFNum("{:d}".format(len(xrefs_body))))
+        trailer.dict.setElement('/Size', PDFCore.PDFNum("{:d}".format(max(index for index in body.objects) if body.objects else 0)))
 
     # That's it.
     P.send(trailer)
