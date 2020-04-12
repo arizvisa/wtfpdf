@@ -999,12 +999,17 @@ def do_writepdf(outfile, parameters):
     # Lastly...the trailer, which should point to our table.
     infile, = trailer_files
     trailer = load_trailer(infile)
-    trailer.setLastCrossRefSection(xrefs_user[0].objectOffset)
+
+    # If there aren't any xrefs, then there's no crossref section here
+    if len(xrefs_user):
+        trailer.setLastCrossRefSection(xrefs_user[0].objectOffset)
+
+    # If we were asked to update it, then fix the size.
     if parameters.update_xrefs:
         trailer.dict.setElement('/Size', PDFCore.PDFNum("{:d}".format(len(xrefs_body))))
-    P.send(trailer)
 
     # That's it.
+    P.send(trailer)
     P.close()
     return 0
 
