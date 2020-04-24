@@ -774,10 +774,7 @@ def update_body(objects, remove_metadata=False):
         meta_update = {}
 
         # First check if we need update the /Length for the stream
-        size = len(obj.rawStream)
-        if obj.isEncodedStream:
-            length = int(meta[u'/Length'].getValue())
-
+        size = len(obj.encodedStream if obj.isEncoded() else obj.decodedStream)
         if is_empty and not operator.contains(meta, u'/Length'):
             print("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length')))
 
