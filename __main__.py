@@ -716,6 +716,38 @@ def load_trailer(infile):
     res.dict.delElement('/Size', update=False)
     return res
 
+def filters_okay(filter, meta):
+    if not operator.contains(meta, u'/Filter'):
+        return filter is None
+
+    # If we don't know what the type is, then we'll try to use .getValue()
+    # to do our equivalency test...
+    if filter and not all(isinstance(item, (PDFCore.PDFArray, PDFCore.PDFName)) for item in [filter, meta[u'/Filter']]):
+        return filter.getValue() == meta[u'/Filter'].getValue() if isinstance(filter, PDFCore.PDFObject) else False
+
+    # We need to check that the encoding will result in the same value, however
+    # some of these can be a PDFName. To hack around this, we'll just convert
+    # both to a PDFArray so we can compare them consistently.
+    res = meta[u'/Filter']
+    mfilter = PDFCore.PDFArray(elements=[res]) if isinstance(res, PDFCore.PDFName) else res
+    ufilter = PDFCore.PDFArray(elements=[filter]) if isinstance(filter, PDFCore.PDFName) else PDFCore.PDFArray(elements=[]) if filter is None else filter
+
+    # Verify that the lengths match because Python3 doesn't have an zip_longest
+    if len(ufilter.getElements()) != len(mfilter.getElements()):
+        return False
+
+    # Now we need to walk through both arrays and see if they actually match
+    for uitem, mitem in zip(ufilter.getElements(), mfilter.getElements()):
+        if not all(isinstance(item, PDFCore.PDFName) for item in [uitem, mitem]):
+            return False
+
+        # Now that we know that we got two names, we can simply compare their values
+        uname, mname = (item.getValue() for item in [uitem, mitem])
+        if uname != mname:
+            return False
+        continue
+    return True
+
 def update_body(objects, remove_metadata=False):
 
     # Update the objects dict in-place
@@ -754,30 +786,20 @@ def update_body(objects, remove_metadata=False):
 
         elif not isinstance(meta[u'/Length'], PDFCore.PDFNum):
             t = PDFCore.PDFNum
-            print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta['/Length']), t.__name__))
+            print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta[u'/Length']), t.__name__))
 
         elif int(meta[u'/Length'].getValue()) != size:
             meta_update[u'/Length'] = PDFCore.PDFNum(u"{:d}".format(size))
 
-        # Now check to see if the /Filter needs to be fixed
-        if flt is None and not operator.contains(meta, '/Filter'):
-            pass
-
-        elif is_empty and not operator.contains(meta, u'/Filter'):
-            print("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter')))
-
-        elif flt and not operator.contains(meta, u'/Filter'):
-            meta_update[u'/Filter'] = flt
-
-        elif not isinstance(meta[u'/Filter'], (PDFCore.PDFName, PDFCore.PDFArray)):
-            t = PDFCore.PDFName
-            print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta['/Filter']), t.__name__))
-
-        elif flt is None and remove_metadata:
-            meta_update[u'/Filter'] = None
-
-        elif flt and meta[u'/Filter'].getValue() != flt.getValue():
-            meta_update[u'/Filter'] = flt
+        # Instead of updating the filter, we're going to simply check it and
+        # see if they correspond. This way the user can do the proper thing,
+        # and update the metadata when they change the encoding.
+        if not filters_okay(flt, meta):
+            if operator.contains(meta, u'/Filter'):
+                print("{:s} has a {:s} of value {:s} which does not correspond to the file encoding: {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta[u'/Filter']), flt and Ffieldvalue(flt) or 'none'))
+            else:
+                print("{:s} is missing the {:s} field. This does not correspond to the file encoding: {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), flt and Ffieldvalue(flt) or 'none'))
+            print("    If this was unintentional, please update its metadata!")
 
         # Check if anything needs to be updated and then do it
         if meta_update:
