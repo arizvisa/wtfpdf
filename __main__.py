@@ -793,9 +793,9 @@ def update_body(objects, remove_metadata=False):
         # and update the metadata when they change the encoding.
         if not filters_okay(flt, meta):
             if operator.contains(meta, u'/Filter'):
-                print("{:s} has a {:s} of value {:s} which does not correspond to the file encoding: {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta[u'/Filter']), flt and Ffieldvalue(flt) or 'none'))
+                print("{:s} has a {:s} of value {:s} which does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta[u'/Filter']), flt and Ffieldvalue(flt) or 'none'))
             else:
-                print("{:s} is missing the {:s} field. This does not correspond to the file encoding: {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), flt and Ffieldvalue(flt) or 'none'))
+                print("{:s} is missing the {:s} field. This does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), flt and Ffieldvalue(flt) or 'none'))
             print("    If this was unintentional, please update its metadata!")
 
         # Check if anything needs to be updated and then do it
