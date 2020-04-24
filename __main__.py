@@ -1053,20 +1053,20 @@ def halp():
     if Plist:
         Plist.add_argument('-v', '--verbose', action='store_true', help='print out verbose information')
 
-    Pread = Paction.add_parser('read', help='read the objects within a pdf file')
-    if Pread:
-        Pread.add_argument('directory', nargs='+', help='specify the directories to dump objects from each trailer into')
-        Pread.add_argument('-c', '--compressed', action='store_true', default=False, help='extract objects with decompressing them')
-        Pread.add_argument('-F', '--fix-offsets', dest='fix_offsets', action='store_true', default=False, help='fix offsets within the trailer and any xrefs')
+    Pextract = Paction.add_parser('extract', help='extract all of the objects within a pdf file to a directory')
+    if Pextract:
+        Pextract.add_argument('directory', nargs='+', help='specify the directories to dump objects from each trailer into')
+        Pextract.add_argument('-c', '--compressed', action='store_true', default=False, help='extract objects with decompressing them')
+        Pextract.add_argument('-F', '--fix-offsets', dest='fix_offsets', action='store_true', default=False, help='fix offsets within the trailer and any xrefs')
 
-    Pcombine = Paction.add_parser('write', help='write the files in a directory into a pdf file')
-    if Pcombine:
-        Pcombine.add_argument('files', nargs='*', help='specify the directory containing the objects to write')
-        Pcombine.add_argument('-B', '--set-binary-chars', dest='set_binary', action='store', type=operator.methodcaller('decode','hex'), default='', help='set the binary comment at the top of the pdf')
-        Pcombine.add_argument('-V', '--set-version', dest='set_version', action='store', type=float, default=1.7, help='set the pdf version to use')
-        Pcombine.add_argument('-s', '--skip-update-metadata', dest='update_metadata', action='store_false', default=True, help='do not update the metadata for each object (Filter and Length) when examining the object\'s contents')
-        Pcombine.add_argument('-R', '--remove-metadata', dest='remove_metadata', action='store_true', default=False, help='remove the Filter field from the object metadata when there isn\'t an encoding (*.Binary)')
-        Pcombine.add_argument('-I', '--ignore-xrefs', dest='update_xrefs', action='store_false', default=True, help='ignore rebuilding of the xrefs (use the provided objects)')
+    Pcreate = Paction.add_parser('create', help='combine all of the files in a directory into a pdf file')
+    if Pcreate:
+        Pcreate.add_argument('files', nargs='*', help='specify the directory containing the objects to write')
+        Pcreate.add_argument('-B', '--set-binary-chars', dest='set_binary', action='store', type=operator.methodcaller('decode','hex'), default='', help='set the binary comment at the top of the pdf')
+        Pcreate.add_argument('-V', '--set-version', dest='set_version', action='store', type=float, default=1.7, help='set the pdf version to use')
+        Pcreate.add_argument('-s', '--skip-update-metadata', dest='update_metadata', action='store_false', default=True, help='do not update the metadata for each object (Filter and Length) when examining the object\'s contents')
+        Pcreate.add_argument('-R', '--remove-metadata', dest='remove_metadata', action='store_true', default=False, help='remove the Filter field from the object metadata when there isn\'t an encoding (*.Binary)')
+        Pcreate.add_argument('-I', '--ignore-xrefs', dest='update_xrefs', action='store_false', default=True, help='ignore rebuilding of the xrefs (use the provided objects)')
 
     Phelp = Paction.add_parser('help', help='yep')
     return P
@@ -1076,16 +1076,16 @@ if __name__ == '__main__':
     import sys
     params = halp.parse_args()
 
-    if params.action == 'list':
+    if params.action in {'list'}:
         result = do_listpdf(params.filename, params)
 
-    elif params.action == 'read':
+    elif params.action in {'extract'}:
         result = do_readpdf(params.filename, params)
 
-    elif params.action == 'write':
+    elif params.action in {'create'}:
         result = do_writepdf(params.filename, params)
 
-    elif params.action == 'help':
+    elif params.action in {'help'}:
         result = halp.print_help() or 0
 
     else:
