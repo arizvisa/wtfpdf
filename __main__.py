@@ -76,13 +76,13 @@ def EncodeToPDF(instance):
         return PDFCore.PDFArray(elements=res)
 
     elif isinstance(instance, float):
-        return PDFCore.PDFNum("{:f}".format(instance))
+        return PDFCore.PDFNum(b"{:f}".format(instance))
 
     elif isinstance(instance, bool):
-        return PDFCore.PDFBool("{!s}".format(instance).lower())
+        return PDFCore.PDFBool(b"{!s}".format(instance).lower())
 
     elif isinstance(instance, six.integer_types):
-        return PDFCore.PDFNum("{:d}".format(instance))
+        return PDFCore.PDFNum(b"{:d}".format(instance))
 
     elif isinstance(instance, six.string_types):
         res, _ = PDFCodec.encode(instance, 'ignore') if isinstance(instance, unicode) else (instance, len(instance))
@@ -107,7 +107,7 @@ def EncodeToPDF(instance):
         # check if it's a hexstring
         try:
             left, middle, right = res[:1], res[1:-1].translate(None, b' \n\t'), res[-1:]
-            if (left, right) == ('<', '>') and len(middle) % 2 == 0 and middle.lower() == middle:
+            if (left, right) == (b'<', b'>') and len(middle) % 2 == 0 and (middle.lower() == middle or middle.upper() == middle):
                 return PDFCore.PDFHexString(middle)
 
         except TypeError:
@@ -706,7 +706,7 @@ def load_trailer(infile):
 
     # If no size was specified, then temporarily create it so that
     # we can construct a PDFTrailer with PeePDF
-    size = PDFCore.PDFNum("{:d}".format(0))
+    size = PDFCore.PDFNum(b"{:d}".format(0))
     meta.setElement('/Size', size, update=False)
 
     # Hand-off our PDFDict to PeePDF
@@ -779,14 +779,14 @@ def update_body(objects, remove_metadata=False):
             print("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length')))
 
         elif not operator.contains(meta, u'/Length'):
-            meta_update[u'/Length'] = PDFCore.PDFNum(u"{:d}".format(size))
+            meta_update[u'/Length'] = PDFCore.PDFNum(b"{:d}".format(size))
 
         elif not isinstance(meta[u'/Length'], PDFCore.PDFNum):
             t = PDFCore.PDFNum
             print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta[u'/Length']), t.__name__))
 
         elif int(meta[u'/Length'].getValue()) != size:
-            meta_update[u'/Length'] = PDFCore.PDFNum(u"{:d}".format(size))
+            meta_update[u'/Length'] = PDFCore.PDFNum(b"{:d}".format(size))
 
         # Instead of updating the filter, we're going to simply check it and
         # see if they correspond. This way the user can do the proper thing,
@@ -848,14 +848,14 @@ def update_xrefs(objects, offset, remove_metadata=False):
             print("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Length')))
 
         elif not operator.contains(meta, u'/Length'):
-            meta_update[u'/Length'] = PDFCore.PDFNum(u"{:d}".format(size))
+            meta_update[u'/Length'] = PDFCore.PDFNum(b"{:d}".format(size))
 
         elif not isinstance(meta[u'/Length'], PDFCore.PDFNum):
             t = PDFCore.PDFNum
             print("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta['/Length']), t.__name__))
 
         elif int(meta[u'/Length'].getValue()) != size:
-            meta_update[u'/Length'] = PDFCore.PDFNum(u"{:d}".format(size))
+            meta_update[u'/Length'] = PDFCore.PDFNum(b"{:d}".format(size))
 
         # Now check to see if the /Filter needs to be fixed
         if flt is None and not operator.contains(meta, u'/Filter'):
@@ -899,7 +899,7 @@ def update_xrefs(objects, offset, remove_metadata=False):
         _, no = objects[ni]
 
         meta = no.getElements()
-        meta[b'/Prev'] = PDFCore.PDFNum(str(offset))
+        meta[b'/Prev'] = PDFCore.PDFNum(b"{d}".format(offset))
         no.rawValue = PDFCore.PDFDictionary(elements=meta).getRawValue()
         no.elements = meta
 
@@ -1033,7 +1033,7 @@ def do_writepdf(outfile, parameters):
 
     # If we were asked to update it, then fix the size.
     if parameters.update_xrefs:
-        trailer.dict.setElement('/Size', PDFCore.PDFNum("{:d}".format(max(index for index in body.objects) if body.objects else 0)))
+        trailer.dict.setElement('/Size', PDFCore.PDFNum(b"{:d}".format(max(index for index in body.objects) if body.objects else 0)))
 
     # That's it.
     P.send(trailer)
