@@ -106,8 +106,8 @@ def EncodeToPDF(instance):
 
         # check if it's a hexstring
         try:
-            left, middle, right = res[:1], res[1:-1], res[-1:]
-            if (left, right) == ('<', '>') and len(middle) % 2 == 0 and middle.lower() == middle and middle.translate(None, b' \t\n') == middle:
+            left, middle, right = res[:1], res[1:-1].translate(None, b' \n\t'), res[-1:]
+            if (left, right) == ('<', '>') and len(middle) % 2 == 0 and middle.lower() == middle:
                 return PDFCore.PDFHexString(middle)
 
         except TypeError:
