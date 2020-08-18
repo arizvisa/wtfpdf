@@ -648,11 +648,27 @@ def load_stream(infile, meta=None):
 
     # Our stream is encoded, so set the correct fields explicitly, and
     # ask peepdf to encode it for us.
-    stream.isEncodedStream = True
-    stream.decodedStream = data
-    wtf, you = stream.encode()
-    if wtf:
-        raise NotImplementedError(you)
+    if data:
+        stream.isEncodedStream = True
+        stream.decodedStream = data
+
+        wtf, you = stream.encode()
+        if wtf:
+            raise NotImplementedError(you)
+
+    # Because the author of peepdf is a fucking idiot, we can't encode
+    # an empty stream. So to deal with this, we assign some data to
+    # satisfy its requirements, and then restore them afterwards.
+    else:
+        stream.isEncodedStream = False
+        stream.decodedStream = ' '
+
+        wtf, you = stream.encode()
+        if wtf:
+            raise NotImplementedError(you)
+
+        stream.isEncodedStream = True
+        stream.decodedStream = stream.encodedStream = ''
     return stream.filter, stream
 
 def load_body(pairs):
