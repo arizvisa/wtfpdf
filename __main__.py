@@ -1,5 +1,5 @@
 import functools, itertools, types, builtins, operator, six
-import argparse, json, math, os, os.path, codecs, heapq
+import argparse, json, math, os, os.path, codecs, string
 from peepdf import *
 
 PDFCodec = codecs.lookup('iso8859-1')
@@ -94,8 +94,8 @@ def EncodeToPDF(instance):
     elif isinstance(instance, six.string_types):
         res, _ = PDFCodec.encode(instance, 'ignore') if isinstance(instance, unicode) else (instance, len(instance))
 
-        # check if it's a name
-        if res.startswith(b'/'):
+        # check if it's a name (which has no whitespace)
+        if res.startswith(b'/') and all(not operator.contains(string.whitespace, item) for item in res):
             return PDFCore.PDFName(res)
 
         # check if it's a reference
