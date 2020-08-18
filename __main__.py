@@ -69,7 +69,14 @@ def EncodeToPDF(instance):
         # ensure the names in the dictionary are proper strings...
         decoded = { name if isinstance(name, unicode) else PDFCodec.decode(name, 'ignore')[0] : item for name, item in instance.items() }
         res = { PDFCodec.encode(name, 'ignore')[0] : EncodeToPDF(item) for name, item in decoded.items() }
-        return PDFCore.PDFDictionary(elements=res)
+        if operator.contains(res, '/JS'):
+            res['/JS'].getJSCode = lambda *args, **kwargs: ''
+            res['/JS'].getUnescapedBytes = lambda *args, **kwargs: ''
+            res['/JS'].getURLs = lambda *args, **kwargs: ''
+            result = PDFCore.PDFDictionary(elements=res)
+        else:
+            result = PDFCore.PDFDictionary(elements=res)
+        return result
 
     elif isinstance(instance, list):
         res = [ EncodeToPDF(item) for item in instance ]
