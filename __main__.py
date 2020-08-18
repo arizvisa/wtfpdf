@@ -95,7 +95,7 @@ def EncodeToPDF(instance):
         res, _ = PDFCodec.encode(instance, 'ignore') if isinstance(instance, unicode) else (instance, len(instance))
 
         # check if it's a name (which has no whitespace)
-        if res.startswith(b'/') and all(not operator.contains(string.whitespace, item) for item in res):
+        if res.startswith(b'/') and all(0x21 <= six.byte2int(item) <= 0x7e and not operator.contains(string.whitespace, item) for item in res):
             return PDFCore.PDFName(res)
 
         # check if it's a reference
