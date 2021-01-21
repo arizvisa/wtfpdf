@@ -11,7 +11,7 @@ class MSG(object):
 
     @staticmethod
     def warning(message):
-        print("Warning: " + message)
+        print("[!] " + message)
 
     @staticmethod
     def fatal(message):
@@ -19,7 +19,7 @@ class MSG(object):
 
     @staticmethod
     def info(message):
-        print(message)
+        print("[*] " + message)
 
     @staticmethod
     def output(message):
@@ -591,17 +591,21 @@ def pairup_files(input):
 
         # if no metafile was found, then skip this object
         if len(meta) == 0:
-            MSG.info("Skipping object {:d} as no meta file was found: {!r}".format(index, meta))
+            MSG.info("Skipping object {:d} as no metadata was found: {!r}".format(index, meta))
             continue
 
         # warn the user if they provided more than one file for a single object
         if len(meta) > 1:
-            MSG.warning("More than one meta file was specified for object {:d}: {!r}".format(index, meta))
+            MSG.warning("More than one file containing metadata was found for object {:d}: {:s}".format(index, ', '.join(meta)))
 
         if len(content) > 1:
-            MSG.warning("More than one file was specified for object {:d}: {!r}".format(index, content))
+            MSG.warning("More than one file was specified for object stream {:d}: {:s}".format(index, ', '.join(content)))
 
-        result[index] = (meta[0], content[0] if len(content) > 0 else None)
+        if any(len(items) > 1 for items in [meta, content]):
+            message = " with stream contents from \"{:s}\".".format(content[-1]) if len(content) else '.'
+            MSG.status("Object {:d} will use the metadata from \"{:s}\"".format(index, meta[-1]) + message)
+
+        result[index] = (meta[-1], content[-1] if len(content) > 0 else None)
 
     return result
 
@@ -633,12 +637,16 @@ def pairup_xrefs(input):
 
         # warn the user if they provided more than one file for a single object
         if len(meta) > 1:
-            MSG.warning("More than one meta file was specified for xref {:d}: {!r}".format(index, meta))
+            MSG.warning("More than one file containing metadata was specified for the xref table in object {:d}: {:s}".format(index, ', '.join(meta)))
 
         if len(xrefs) > 1:
-            MSG.warning("More than one table was specified for xref {:d}: {!r}".format(index, xrefs))
+            MSG.warning("More than one file was specified for the xref table in object {:d}: {:s}".format(index, ', '.join(xrefs)))
 
-        result[index] = (meta[0] if len(meta) else None, xrefs[0])
+        if any(len(items) > 1 for items in [meta, xrefs]):
+            message = " with metadata from \"{:s}\".".format(meta[-1]) if len(meta) else '.'
+            MSG.status("Xref table {:d} will use the contents from \"{:s}\"".format(index, xrefs[-1]) + message)
+
+        result[index] = (meta[-1] if len(meta) else None, xrefs[-1])
     return result
 
 def load_stream(infile, meta=None):
@@ -837,16 +845,16 @@ def update_body(objects, remove_metadata=False):
         # and update the metadata when they change the encoding.
         if not filters_okay(flt, meta):
             if operator.contains(meta, u'/Filter'):
-                MSG.warning("{:s} has a {:s} of value {:s} which does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta[u'/Filter']), flt and Ffieldvalue(flt) or 'none'))
+                MSG.info("{:s} has a {:s} of value {:s} which does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta[u'/Filter']), flt and Ffieldvalue(flt) or 'none'))
             else:
-                MSG.warning("{:s} is missing the {:s} field. This does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), flt and Ffieldvalue(flt) or 'none'))
-            MSG.warning("    If this was unintentional, please update its metadata!")
+                MSG.info("{:s} is missing the {:s} field. This does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), flt and Ffieldvalue(flt) or 'none'))
+            MSG.info("    If this was unintentional, please update its metadata!")
 
         # Check if anything needs to be updated and then do it
         if meta_update:
             old = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if operator.contains(meta, name) and meta[name] is None else Ffieldvalue(meta[name]) if operator.contains(meta, name) else '<Missing>']) for name in meta_update)
             new = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())
-            MSG.status("Updating the fields for {:s} from {!s}: {!s}".format(Fobject(obj, index), old, new))
+            MSG.status("Updating the fields for {:s} from {!s} to {!s}".format(Fobject(obj, index), old, new))
 
             remove = { name for name, item in meta_update.items() if item is None }
             update = { PDFCodec.encode(name)[0] : meta_update[name] for name in meta_update if name not in remove }
@@ -925,7 +933,7 @@ def update_xrefs(objects, offset, remove_metadata=False):
         if meta_update:
             old = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if operator.contains(meta, name) and meta[name] is None else Ffieldvalue(meta[name]) if operator.contains(meta, name) else '<Missing>']) for name in meta_update)
             new = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())
-            MSG.status("Updating the fields for {:s} from {!s}: {!s}".format(Fxref(obj, index), old, new))
+            MSG.status("Updating the fields for {:s} from {!s} to {!s}".format(Fxref(obj, index), old, new))
 
             remove = { name for name, item in meta_update.items() if item is None }
             update = { PDFCodec.encode(name)[0] : meta_update[name] for name in meta_update if name not in remove }
