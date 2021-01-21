@@ -15,7 +15,7 @@ class MSG(object):
 
     @staticmethod
     def fatal(message):
-        print(message)
+        print("[!!!] " + message)
 
     @staticmethod
     def info(message):
@@ -599,7 +599,7 @@ def pairup_files(input):
             MSG.warning("More than one file containing metadata was found for object {:d}: {:s}".format(index, ', '.join(meta)))
 
         if len(content) > 1:
-            MSG.warning("More than one file was specified for object stream {:d}: {:s}".format(index, ', '.join(content)))
+            MSG.warning("More than one file was provided for object stream {:d}: {:s}".format(index, ', '.join(content)))
 
         if any(len(items) > 1 for items in [meta, content]):
             message = " with stream contents from \"{:s}\".".format(content[-1]) if len(content) else '.'
@@ -640,7 +640,7 @@ def pairup_xrefs(input):
             MSG.warning("More than one file containing metadata was specified for the xref table in object {:d}: {:s}".format(index, ', '.join(meta)))
 
         if len(xrefs) > 1:
-            MSG.warning("More than one file was specified for the xref table in object {:d}: {:s}".format(index, ', '.join(xrefs)))
+            MSG.warning("More than one file was provided for the xref table in object {:d}: {:s}".format(index, ', '.join(xrefs)))
 
         if any(len(items) > 1 for items in [meta, xrefs]):
             message = " with metadata from \"{:s}\".".format(meta[-1]) if len(meta) else '.'
@@ -848,7 +848,7 @@ def update_body(objects, remove_metadata=False):
                 MSG.info("{:s} has a {:s} of value {:s} which does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta[u'/Filter']), flt and Ffieldvalue(flt) or 'none'))
             else:
                 MSG.info("{:s} is missing the {:s} field. This does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), flt and Ffieldvalue(flt) or 'none'))
-            MSG.info("    If this was unintentional, please update its metadata!")
+            MSG.status("Updated the contents of object stream {:d} using stream type {:s}.".format(index, flt))
 
         # Check if anything needs to be updated and then do it
         if meta_update:
