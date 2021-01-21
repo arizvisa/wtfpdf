@@ -1041,9 +1041,40 @@ def do_writepdf(outfile, parameters):
         section.addSubsection(subsection)
         P.send(section)
 
-    # Lastly...the trailer, which should point to our table.
-    infile, = trailer_files
-    trailer = load_trailer(infile)
+    # Lastly...check if we were given any trailers, which should point
+    # to the file offset of our table and the catalog object.
+    if trailer_files:
+        infile, = trailer_files
+        trailer = load_trailer(infile)
+
+    # Otherwise if we weren't given any files, then we crawl through
+    # all of the objects looking for a /Catalog so that we can create
+    # a new trailer pointing to the /Catalog as its /Root.
+    else:
+        def filter_catalog(item, type='/Catalog'):
+            if isinstance(item, PDFCore.PDFDictionary):
+                return item.getDictType() in {type}
+            elif isinstance(item, PDFCore.PDFObjectStream):
+                return item.getElement('/Type').getValue() in {type}
+            return False
+
+        # Enumerate all the catalogs and grab the first one that we found.
+        catalogs = [id for id, ref in body.objects.items() if filter_catalog(ref.object)]
+        if len(catalogs):
+            if len(catalogs) > 1:
+                raise ValueError("More than one catalog ({:s}) was found in the following list of objects: {:s}".format(', '.join(map("{:d}".format, catalogs)), ', '.join(map("{:d}".format, sorted(body.objects)))))
+
+            root, = map(functools.partial(operator.getitem, body.objects), catalogs)
+
+        # Complain if we couldn't find one.
+        else:
+            raise ValueError("No valid objects of the \"{type}\" type were found in the following list of objects: {list}".format(key='/Type', type='/Catalog', list=', '.join(map("{:d}".format, sorted(body.objects)))))
+
+        # Reconstruct a trailer using the catalog we found as its root
+        item = PDFCore.PDFDictionary()
+        item.setElement('/Size', PDFCore.PDFNum(*map(b"{!s}".format, [1 + max(body.objects)])))
+        item.setElement('/Root', PDFCore.PDFReference(*map(b"{!s}".format, [root.getId(), root.getGenerationNumber()])))
+        trailer = PDFCore.PDFTrailer(item)
 
     # Update the last crossref section with the user-specified xrefs
     trailer.setLastCrossRefSection(xrefs_offset if parameters.update_xrefs else xrefs[0].objectOffset)
