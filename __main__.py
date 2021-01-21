@@ -11,10 +11,14 @@ class MSG(object):
 
     @staticmethod
     def warning(message):
-        print("===> " + message)
+        print("Warning: " + message)
 
     @staticmethod
     def fatal(message):
+        print(message)
+
+    @staticmethod
+    def info(message):
         print(message)
 
     @staticmethod
@@ -286,7 +290,7 @@ def get_xrefs(trailer, table):
 
         # Ensure that it's of a valid type.
         if not isinstance(object, (PDFCore.PDFTrailer, PDFCore.PDFStream, PDFCore.PDFCrossRefSection)):
-            MSG.output("Warning: Offset ({:#x}) from trailer points to object of type {!s}".format(offset, object.__class__))
+            MSG.warning("Offset ({:#x}) from trailer points to object of type {!s}".format(offset, object.__class__))
             break
 
         # If we're pointing at another PDFTrailer, then check if there's an
@@ -399,7 +403,7 @@ def dump_objects(pdf, revision, path, compressed=False):
 
         # If there were any errors, then notify the user.
         if len(object.errors):
-            MSG.output("Errors in revision {:d} ({:s}) with {:s}: {:d}".format(revision, path, Fobjectname(index), len(object.errors)))
+            MSG.warning("Errors in revision {:d} ({:s}) with {:s}: {:d}".format(revision, path, Fobjectname(index), len(object.errors)))
 
         # Otherwise, aggregate the object index into our success list
         else:
@@ -463,10 +467,10 @@ def do_readpdf(infile, parameters):
 
     if len(stats['Versions']) != len(parameters.directory):
         count = len(stats['Versions'])
-        MSG.output("The input document that was specified ({:s}) contains {:d} individual trailers!".format(infile, count))
-        MSG.output('')
-        MSG.output("Please provide {:d} paths to extract each trailer into in order to continue!".format(count))
-        MSG.output('')
+        MSG.fatal("The input document that was specified ({:s}) contains {:d} individual trailers!".format(infile, count))
+        MSG.fatal('')
+        MSG.fatal("Please provide {:d} paths to extract each trailer into in order to continue!".format(count))
+        MSG.fatal('')
         raise ValueError("Only {:d} directories were provided...".format(len(parameters.directory)))
 
     # Go through every single revision and extract the boundaries of all our
@@ -484,7 +488,7 @@ def do_readpdf(infile, parameters):
         stream, section = P.trailer[version]
         offset = stream.getLastCrossRefSection()
         if not operator.contains(table, offset):
-            MSG.output("Unable to locate stream for trailer {:d} at offset {:+#x}".format(version, offset))
+            MSG.warning("Unable to locate stream for trailer {:d} at offset {:+#x}".format(version, offset))
             continue
         continue
 
@@ -493,7 +497,7 @@ def do_readpdf(infile, parameters):
     for version in range(len(P.body)):
         path = parameters.directory[version]
         if not os.path.isdir(path):
-            MSG.output("Skipping revision {:d} due to output path not being a directory: {:s}".format(version, path))
+            MSG.info("Skipping revision {:d} due to output path not being a directory: {:s}".format(version, path))
 
         else:
             dump_objects(P, version, path, compressed=parameters.compressed)
@@ -515,7 +519,7 @@ def collect_files(paths):
     result, xrefs, trailers = {}, {}, []
     for item in paths:
         if not os.path.isfile(item):
-            MSG.output("Skipping non-file path: {:s}".format(item))
+            MSG.info("Skipping non-file path: {:s}".format(item))
             continue
         fullname = os.path.basename(item)
         name, ext = os.path.splitext(fullname)
@@ -523,7 +527,7 @@ def collect_files(paths):
         # validate our name format
         components = name.split('_')
         if not operator.contains({1, 2, 3}, len(components)):
-            MSG.output("Skipping path due to invalid format: {:s}".format(item))
+            MSG.info("Skipping path due to invalid format: {:s}".format(item))
             continue
 
         # check if it's the trailer
@@ -532,7 +536,7 @@ def collect_files(paths):
             if trailer == 'trailer':
                 trailers.append(item)
             else:
-                MSG.output("Skipping path due to invalid trailer filename: {:s}".format(item))
+                MSG.info("Skipping path due to invalid trailer filename: {:s}".format(item))
             continue
 
         # check if it's an xref table
@@ -549,19 +553,19 @@ def collect_files(paths):
                     xrefs.setdefault(int(index), []).append(item)
                     continue
 
-            MSG.output("Skipping path due to invalid xref filename: {:s}".format(item))
+            MSG.info("Skipping path due to invalid xref filename: {:s}".format(item))
             continue
 
         # validate its components
         index, generation, object = components
         if generation != '0' and object != 'obj':
-            MSG.output("Skipping path due to invalid format: {:s}".format(item))
+            MSG.info("Skipping path due to invalid format: {:s}".format(item))
             continue
 
         try:
             int(index)
         except ValueError:
-            MSG.output("Skipping path due to invalid index: {:s}".format(item))
+            MSG.info("Skipping path due to invalid index: {:s}".format(item))
 
         result.setdefault(int(index), []).append(item)
     return result, trailers, xrefs
@@ -577,7 +581,7 @@ def pairup_files(input):
             fullname = os.path.basename(item)
             name, ext = os.path.splitext(fullname)
             if name != "{:d}_0_obj".format(index):
-                MSG.output("Skipping path for object {:d} due to invalid name: {:s}".format(index, item))
+                MSG.info("Skipping path for object {:d} due to invalid name: {:s}".format(index, item))
                 continue
             if ext == '.json':
                 meta.append(item)
@@ -587,15 +591,15 @@ def pairup_files(input):
 
         # if no metafile was found, then skip this object
         if len(meta) == 0:
-            MSG.output("Skipping object {:d} as no metafile was found: {!r}".format(index, meta))
+            MSG.info("Skipping object {:d} as no meta file was found: {!r}".format(index, meta))
             continue
 
         # warn the user if they provided more than one file for a single object
         if len(meta) > 1:
-            MSG.output("More than one metafile was specified for object {:d}: {!r}".format(index, meta))
+            MSG.warning("More than one meta file was specified for object {:d}: {!r}".format(index, meta))
 
         if len(content) > 1:
-            MSG.output("More than one file was specified for object {:d}: {!r}".format(index, content))
+            MSG.warning("More than one file was specified for object {:d}: {!r}".format(index, content))
 
         result[index] = (meta[0], content[0] if len(content) > 0 else None)
 
@@ -613,7 +617,7 @@ def pairup_xrefs(input):
             fullname = os.path.basename(item)
             name, ext = os.path.splitext(fullname)
             if name != Ftrailername(index):
-                MSG.output("Skipping path for trailer {:d} due to invalid name: {:s}".format(index, item))
+                MSG.info("Skipping path for trailer {:d} due to invalid name: {:s}".format(index, item))
                 continue
 
             if ext == '.json':
@@ -624,15 +628,15 @@ def pairup_xrefs(input):
 
         # if no metafile was found, then skip this object
         if len(xrefs) == 0:
-            MSG.output("Skipping xref {:d} as no table was found: {!r}".format(index, xrefs))
+            MSG.info("Skipping xref {:d} as no table was found: {!r}".format(index, xrefs))
             continue
 
         # warn the user if they provided more than one file for a single object
         if len(meta) > 1:
-            MSG.output("More than one metafile was specified for xref {:d}: {!r}".format(index, meta))
+            MSG.warning("More than one meta file was specified for xref {:d}: {!r}".format(index, meta))
 
         if len(xrefs) > 1:
-            MSG.output("More than one table was specified for xref {:d}: {!r}".format(index, xrefs))
+            MSG.warning("More than one table was specified for xref {:d}: {!r}".format(index, xrefs))
 
         result[index] = (meta[0] if len(meta) else None, xrefs[0])
     return result
@@ -705,7 +709,7 @@ def load_body(pairs):
                 filter_and_stream = load_stream(contentfile, EncodeToPDF(meta))
 
             except NotImplementedError as E:
-                MSG.output("Unable to load content (\"{:s}\") for object {:d}".format(contentfile, index))
+                MSG.fatal("Unable to load content (\"{:s}\") for object {:d}".format(contentfile, index))
                 raise E
             body[index] = filter_and_stream
 
@@ -733,7 +737,7 @@ def load_xrefs(pairs):
             filter_and_stream = load_stream(xfilename, None if meta is None else EncodeToPDF(meta))
 
         except NotImplementedError as E:
-            MSG.output("Unable to load content (\"{:s}\") for xref {:d}".format(contentfile, index))
+            MSG.fatal("Unable to load content (\"{:s}\") for xref {:d}".format(contentfile, index))
             raise E
         result[index] = filter_and_stream
     return result
@@ -808,7 +812,7 @@ def update_body(objects, remove_metadata=False):
         res = EncodeToPDF(meta)
         if not isinstance(res, PDFCore.PDFDictionary):
             t = res.__class__
-            MSG.output("Skipping {:s} while updating body due to invalid metadata type ({!s})".format(Fobject(obj, index), t.__name__))
+            MSG.info("Skipping {:s} while updating body due to invalid metadata type ({!s})".format(Fobject(obj, index), t.__name__))
             continue
 
         meta_update = {}
@@ -816,14 +820,14 @@ def update_body(objects, remove_metadata=False):
         # First check if we need update the /Length for the stream
         size = len(obj.encodedStream if obj.isEncoded() else obj.decodedStream)
         if is_empty and not operator.contains(meta, u'/Length'):
-            MSG.output("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length')))
+            MSG.status("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length')))
 
         elif not operator.contains(meta, u'/Length'):
             meta_update[u'/Length'] = PDFCore.PDFNum(b"{:d}".format(size))
 
         elif not isinstance(meta[u'/Length'], PDFCore.PDFNum):
             t = PDFCore.PDFNum
-            MSG.output("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta[u'/Length']), t.__name__))
+            MSG.status("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fobject(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta[u'/Length']), t.__name__))
 
         elif int(meta[u'/Length'].getValue()) != size:
             meta_update[u'/Length'] = PDFCore.PDFNum(b"{:d}".format(size))
@@ -833,16 +837,16 @@ def update_body(objects, remove_metadata=False):
         # and update the metadata when they change the encoding.
         if not filters_okay(flt, meta):
             if operator.contains(meta, u'/Filter'):
-                MSG.output("{:s} has a {:s} of value {:s} which does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta[u'/Filter']), flt and Ffieldvalue(flt) or 'none'))
+                MSG.warning("{:s} has a {:s} of value {:s} which does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta[u'/Filter']), flt and Ffieldvalue(flt) or 'none'))
             else:
-                MSG.output("{:s} is missing the {:s} field. This does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), flt and Ffieldvalue(flt) or 'none'))
-            MSG.output("    If this was unintentional, please update its metadata!")
+                MSG.warning("{:s} is missing the {:s} field. This does not correspond to the file encoding {:s}.".format(Fobject(obj, index).capitalize(), Ffieldname('Filter'), flt and Ffieldvalue(flt) or 'none'))
+            MSG.warning("    If this was unintentional, please update its metadata!")
 
         # Check if anything needs to be updated and then do it
         if meta_update:
             old = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if operator.contains(meta, name) and meta[name] is None else Ffieldvalue(meta[name]) if operator.contains(meta, name) else '<Missing>']) for name in meta_update)
             new = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())
-            MSG.output("Updating the fields for {:s} from {!s}: {!s}".format(Fobject(obj, index), old, new))
+            MSG.status("Updating the fields for {:s} from {!s}: {!s}".format(Fobject(obj, index), old, new))
 
             remove = { name for name, item in meta_update.items() if item is None }
             update = { PDFCodec.encode(name)[0] : meta_update[name] for name in meta_update if name not in remove }
@@ -869,7 +873,7 @@ def update_xrefs(objects, offset, remove_metadata=False):
 
         # Ensure that we're an object stream
         if not isinstance(obj, PDFCore.PDFObjectStream):
-            MSG.output("Skipping {:s} while updating xrefs...".format(Fxref(obj, index)))
+            MSG.info("Skipping {:s} while updating xrefs...".format(Fxref(obj, index)))
             continue
         meta, is_empty = obj.getElements(), not (obj.rawValue and True or False)
 
@@ -877,7 +881,7 @@ def update_xrefs(objects, offset, remove_metadata=False):
         res = EncodeToPDF(meta)
         if not isinstance(res, PDFCore.PDFDictionary):
             t = res.__class__
-            MSG.output("Skipping {:s} while updating xrefs due to invalid metadata type ({!s})".format(Fxref(obj, index), t.__name__))
+            MSG.info("Skipping {:s} while updating xrefs due to invalid metadata type ({!s})".format(Fxref(obj, index), t.__name__))
             continue
 
         meta_update = {}
@@ -885,14 +889,14 @@ def update_xrefs(objects, offset, remove_metadata=False):
         # First check and update the length so it corresponds to the stream
         size = len(obj.getRawStream())
         if is_empty and not operator.contains(meta, u'/Length'):
-            MSG.output("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Length')))
+            MSG.info("{:s} is empty and does not have a {:s} field...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Length')))
 
         elif not operator.contains(meta, u'/Length'):
             meta_update[u'/Length'] = PDFCore.PDFNum(b"{:d}".format(size))
 
         elif not isinstance(meta[u'/Length'], PDFCore.PDFNum):
             t = PDFCore.PDFNum
-            MSG.output("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta['/Length']), t.__name__))
+            MSG.info("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Length'), Ffieldvalue(meta['/Length']), t.__name__))
 
         elif int(meta[u'/Length'].getValue()) != size:
             meta_update[u'/Length'] = PDFCore.PDFNum(b"{:d}".format(size))
@@ -902,14 +906,14 @@ def update_xrefs(objects, offset, remove_metadata=False):
             pass
 
         elif not operator.contains(meta, u'/Filter'):
-            MSG.output("{:s} does not have a {:s} field...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Filter')))
+            MSG.info("{:s} does not have a {:s} field...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Filter')))
 
         elif flt and not operator.contains(meta, u'/Filter'):
             meta_update[u'/Filter'] = flt
 
         elif not isinstance(meta[u'/Filter'], (PDFCore.PDFName, PDFCore.PDFArray)):
             t = PDFCore.PDFName
-            MSG.output("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta['/Filter']), t.__name__))
+            MSG.info("{:s} has a {:s} field {:s} not of the type {:s}...skipping its update!".format(Fxref(obj, index).capitalize(), Ffieldname('Filter'), Ffieldvalue(meta['/Filter']), t.__name__))
 
         elif flt is None and remove_metadata:
             meta_update[u'/Filter'] = None
@@ -921,7 +925,7 @@ def update_xrefs(objects, offset, remove_metadata=False):
         if meta_update:
             old = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if operator.contains(meta, name) and meta[name] is None else Ffieldvalue(meta[name]) if operator.contains(meta, name) else '<Missing>']) for name in meta_update)
             new = ' '.join('='.join([name.split('/',1)[1], '<Removed>' if item is None else Ffieldvalue(item)]) for name, item in meta_update.items())
-            MSG.output("Updating the fields for {:s} from {!s}: {!s}".format(Fxref(obj, index), old, new))
+            MSG.status("Updating the fields for {:s} from {!s}: {!s}".format(Fxref(obj, index), old, new))
 
             remove = { name for name, item in meta_update.items() if item is None }
             update = { PDFCodec.encode(name)[0] : meta_update[name] for name in meta_update if name not in remove }
@@ -1099,7 +1103,7 @@ def do_writepdf(outfile, parameters):
     # If there aren't any xrefs, then there's no crossref section here,
     # so explicitly hack it into the trailer's lastCrossRefSection
     if trailer.lastCrossRefSection is None:
-        MSG.output("No xrefs were found! Using an empty string for the last crossref section offset")
+        MSG.status("No xrefs were found! Using an empty string for the last crossref section offset")
         trailer.lastCrossRefSection = ''
 
     # If we were asked to update it, then fix the size.
