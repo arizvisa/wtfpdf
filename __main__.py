@@ -81,6 +81,8 @@ def DecodeFromPDF(element):
         return { str(name) : DecodeFromPDF(item) for name, item in iterable.items() }
     elif isinstance(element, PDFCore.PDFBool):
         return bool(element)
+    elif isinstance(element, PDFCore.PDFNull):
+        return None
     raise TypeError(element)
 
 def EncodeToPDF(instance):
@@ -108,6 +110,9 @@ def EncodeToPDF(instance):
 
     elif isinstance(instance, bool):
         return PDFCore.PDFBool(b"{!s}".format(instance).lower())
+
+    elif isinstance(instance, None.__class__):
+        return PDFCore.PDFNull(b'null')
 
     elif isinstance(instance, six.integer_types):
         return PDFCore.PDFNum(b"{:d}".format(instance))
