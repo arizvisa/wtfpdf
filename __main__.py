@@ -402,6 +402,10 @@ def dump_objects(pdf, revision, path, compressed=False):
     for index in items:
         object = pdf.getObject(index, version=revision)
 
+        if isinstance(index, six.string_types):
+            MSG.warning("Current index ({!s}) returned by {:s} is of {!s} and needs to be converted to an integer.".format(index, 'peepdf', type(index)))
+            index = int(index)
+
         Fobjectname = "{:d}_0_obj".format
         Fdump = functools.partial(json.dump, encoding=PDFCodec.name, indent=4, sort_keys=True)
         Ftypename = lambda element: element.__class__.__name__
