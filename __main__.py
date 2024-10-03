@@ -221,10 +221,16 @@ def do_listpdf(infile, parameters):
         for id, offset, size in position['objects']:
             object = P.getObject(id)
             meta = object.getStats()
-            dictionary = object.getElements()
-            if isinstance(dictionary, dict):
-                items = [ "{:s}={!s}".format(name, item.getRawValue()) for name, item in sorted(dictionary.items())]
+            if isinstance(object, PDFCore.PDFDictionary):
+                elements = object.getElements()
+                items = [ "{:s}={!s}".format(name, item.getRawValue()) for name, item in sorted(elements.items())]
+            elif isinstance(object, PDFCore.PDFArray):
+                elements = object.getElements()
+                items = map("{!s}".format, [ item.getRawValue() for item in sorted(elements) ])
+            elif isinstance(object, PDFCore.PDFString):
+                items = [ object.getValue() ]
             else:
+                elements = object.getElements()
                 items = [ item.getRawValue() for item in dictionary ]
             description = ', '.join(items).translate(None, '\r\n')
             MSG.output("\t [{offset:#0{digits_pos:d}x}{size:+0{digits_sz:d}x}] {:d} {:d} obj {padding:s}: {dict!s}".format(id, 0, offset=offset, size=size, dict=description if len(description) < 132 else description[:132] + '...', digits_pos=2+digits_pos, digits_sz=1 + digits_sz, padding=' '*(digits_id - len("{:d}".format(id)))))
